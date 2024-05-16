@@ -1,0 +1,2 @@
+id,type,subtype,price,transactionType,zip,visualisationOption,kitchen_type,constructionYear,building_condition,heatingType,primaryEnergyConsumptionLevel,bedroom_count,land_surface,atticExists,basementExists,garden_surface,terrace_exists,hasSwimmingPool,indoor_parking_count,outdoor_parking_count,isNewlyBuilt,customer_id,customer_name,customer_family
+11385246,apartment,apartment,445000,for sale,9000,xl,installed,2019,good,gas,52,2,,,,,true,,,,,2118760,landbergh,agency
