@@ -1,9 +1,27 @@
+import argparse
+import time
 from scraper import scrape_houses
+from parser import parse_data_folder
 
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Scrape houses and extract data.')
+    parser.add_argument('num_pages', type=int, help='Number of pages to scrape')
+    args = parser.parse_args()
+
     # Start scraping process
-    scrape_houses()
+    scrape_houses(args.num_pages)
+
+    data_folder = 'data'
+    start_time = time.time()
+    df = parse_data_folder(data_folder)
+    end_time = time.time()
+    duration = end_time - start_time
+    print(f"Time taken to parse data folder: {duration:.2f} seconds")
+
+    # Save DataFrame to CSV or perform further processing
+    df.to_csv('property_data.csv', index=False)
+    print("Data extraction and saving completed.")
 
 if __name__ == "__main__":
     main()
-    

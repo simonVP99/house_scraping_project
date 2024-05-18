@@ -36,9 +36,9 @@ def save_house_data(house_url):
     except requests.RequestException as e:
         print(f"Error fetching the URL {house_url}: {e}")
 
-def scrape_houses():
+def scrape_houses(num_pages):
     page = 1
-    while page <10:
+    while page <= num_pages:
         url = BASE_URL + str(page)
         try:
             response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; immo/1.0; +http://yourwebsite.com/bot)'})
@@ -53,6 +53,3 @@ def scrape_houses():
         except requests.RequestException as e:
             print(f"Error during request to {url}: {e}")
             break
-
-# Run the scraper
-scrape_houses()
