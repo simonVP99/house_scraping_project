@@ -1,6 +1,7 @@
 import os
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime
 
 BASE_URL = "https://www.immoweb.be/en/search/house-and-apartment/for-sale/gent/9000?countries=BE&isNewlyBuilt=false&page="
 
@@ -12,6 +13,8 @@ def parse_page(html):
 
 def save_house_data(house_url):
     headers = {'User-Agent': 'Mozilla/5.0 (compatible; immo/1.0; +http://yourwebsite.com/bot)'}
+    today = datetime.today().strftime('%d%m%Y')
+
     try:
         response = requests.get(house_url, headers=headers)
         response.raise_for_status()
@@ -24,7 +27,7 @@ def save_house_data(house_url):
         os.makedirs(directory, exist_ok=True)
 
         # Save the full HTML source to a file
-        file_path = os.path.join(directory, "full_source.html")
+        file_path = os.path.join(directory, f"full_source_{today}.html")
         with open(file_path, "w", encoding="utf-8") as file:
             file.write(response.text)
 
