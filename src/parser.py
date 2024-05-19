@@ -255,3 +255,4 @@ def parse_data_folder(root_directory):
     # Create a DataFrame from the extracted data
     df = pd.DataFrame(data)
     return df
+

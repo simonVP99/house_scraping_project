@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 
 BASE_URL = "https://www.immoweb.be/en/search/house-and-apartment/for-sale/gent/9000?countries=BE&isNewlyBuilt=false&page="
+BASE_DIR = '/Users/simon/Desktop/personal/immo_datacollection/house_scraping_project'
 
 def parse_page(html):
     soup = BeautifulSoup(html, 'html.parser')
@@ -23,7 +24,7 @@ def save_house_data(house_url):
         property_id = house_url.split('/')[-1]
 
         # Create a directory for the property using its unique ID
-        directory = f"data/{property_id}"
+        directory = os.path.join(BASE_DIR, 'data', property_id)
         os.makedirs(directory, exist_ok=True)
 
         # Save the full HTML source to a file
