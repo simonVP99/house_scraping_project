@@ -13,7 +13,7 @@ def main():
     # Define absolute paths
     base_dir = '/Users/simon/Desktop/personal/immo_datacollection/house_scraping_project'
     data_folder = os.path.join(base_dir, 'data')
-    output_file = os.path.join(base_dir, 'property_data.csv')
+    output_file = os.path.join(base_dir, 'outputs/property_data_raw.csv')
 
     # Start scraping process
     scrape_houses(args.num_pages)
