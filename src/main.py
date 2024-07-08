@@ -17,7 +17,7 @@ def main():
 
     # Start scraping process
     scrape_houses(args.num_pages)
-
+    print('Start Parsing House Data')
     start_time = time.time()
     df = parse_data_folder(data_folder)
     end_time = time.time()
