@@ -4,3 +4,5 @@ __pycache__/
 data/
 logs/
 src/nb.ipynb
+*.ipynb
+exteral_data/

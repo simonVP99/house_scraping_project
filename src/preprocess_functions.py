@@ -1,3 +1,4 @@
+from operator import add
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
@@ -6,6 +7,10 @@ import plotly.express as px
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
+
+import geopandas as gpd
+from shapely.geometry import Point, shape
+import json
 
 
 def perform_regression_plot(df, x_col, y_col, color = None, hover = None):# Put this in utils.tools
@@ -142,5 +147,50 @@ def preprocess(df):
     )
     df.dropna(subset = ['primary_energy_consumption'], inplace = True)
 
-    
+    df = add_neighbourhood(df)
+
     return df
+
+
+def add_neighbourhood(df, wijken_path = 'external_data/stadswijken-gent.csv'):
+    wijken = pd.read_csv(wijken_path, sep = ';')
+    wijken['geometry'] = wijken['Geometry'].apply(parse_geometry)
+    wijken_gdf = gpd.GeoDataFrame(wijken, geometry='geometry')
+    wijken_gdf.set_crs(epsg=4326, inplace=True)
+
+    df['neighbourhood'] = df.apply(
+    lambda row: get_neighborhood(row['latitude'], row['longitude'], wijken_gdf),
+    axis=1
+    )
+    return df
+
+def parse_geometry(geometry_str):
+    geometry_dict = json.loads(geometry_str)
+    return shape(geometry_dict)
+
+def get_neighborhood(lat, lon, wijken_gdf):
+    """
+    Given a latitude and longitude, return the neighborhood name.
+
+    Parameters:
+    - lat (float): Latitude of the point.
+    - lon (float): Longitude of the point.
+    - wijken_gdf (GeoDataFrame): GeoDataFrame containing neighborhood polygons.
+
+    Returns:
+    - str or None: The name of the neighborhood if found, else None.
+    """
+    # Create a shapely Point from the latitude and longitude
+    point = Point(lon, lat)  # Note: Point takes (x, y) = (longitude, latitude)
+    
+    # Use spatial index to find possible matching neighborhoods
+    possible_matches_index = list(wijken_gdf.sindex.intersection(point.bounds))
+    possible_matches = wijken_gdf.iloc[possible_matches_index]
+    
+    # Iterate through possible matches and check containment
+    for idx, row in possible_matches.iterrows():
+        if row['geometry'].contains(point):
+            return row['wijk']  # You can change 'wijk' to another column if needed
+    
+    # Return None if no neighborhood is found
+    return 'Unknown'
