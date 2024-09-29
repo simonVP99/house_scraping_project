@@ -19,7 +19,7 @@ def main():
     scrape_houses(args.num_pages)
     print('Start Parsing House Data')
     start_time = time.time()
-    df = parse_data_folder(data_folder)
+    df = parse_data_folder(data_folder, output_file)
     end_time = time.time()
     duration = end_time - start_time
     print(f"Time taken to parse data folder: {duration:.2f} seconds")

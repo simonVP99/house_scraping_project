@@ -3,6 +3,7 @@ import re
 import json
 import pandas as pd
 from bs4 import BeautifulSoup
+from datetime import datetime
 
 def extract_info(file_path):
     """
@@ -228,7 +229,7 @@ def extract_info(file_path):
         'cadastral_income': cadastral_income
     }
 
-def parse_data_folder(root_directory):
+def parse_data_folder(root_directory, output_file):
     """
     Parse the data folder and extract information from each HTML file.
     
@@ -239,11 +240,11 @@ def parse_data_folder(root_directory):
         pd.DataFrame: A DataFrame containing the extracted information.
     """
     data = []
-
+    today = datetime.today().strftime('%d%m%Y')
     # Walk through the directory structure
     for dirpath, dirnames, filenames in os.walk(root_directory):
         for filename in filenames:
-            if filename.endswith('.html'):
+            if filename.endswith('.html') and today in filename:
                 file_path = os.path.join(dirpath, filename)
 
                 # Extract information using the extractor function
@@ -254,5 +255,11 @@ def parse_data_folder(root_directory):
 
     # Create a DataFrame from the extracted data
     df = pd.DataFrame(data)
+
+    df_og = pd.read_csv(output_file)
+
+    df = pd.concat([df_og, df], ignore_index=True)
+
+
     return df
 
