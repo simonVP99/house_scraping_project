@@ -214,6 +214,7 @@ def preprocess(df):
     # Add neighborhood information (assuming the function is defined)
     df = add_neighbourhood(df)
 
+
     return df
 
 
@@ -227,6 +228,9 @@ def add_neighbourhood(df, wijken_path = 'external_data/stadswijken-gent.csv'):
     lambda row: get_neighborhood(row['latitude'], row['longitude'], wijken_gdf),
     axis=1
     )
+    df['neighbourhood'] = df['neighbourhood'].str.replace(' ', '', regex=False)
+    df['neighbourhood'] = df['neighbourhood'].str.replace('-', '_', regex=False)
+    
     return df
 
 def parse_geometry(geometry_str):
