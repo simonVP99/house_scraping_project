@@ -12,7 +12,7 @@ TEST_URL="http://www.google.com"
 VENV_PATH="/Users/simon/Desktop/personal/immo_datacollection/house_scraping_project/.venv/bin/activate"
 
 # Command to run your Python script
-PYTHON_COMMAND="python3 /Users/simon/Desktop/personal/immo_datacollection/house_scraping_project/src/main.py 50"
+PYTHON_COMMAND="python3 /Users/simon/Desktop/personal/immo_datacollection/house_scraping_project/src/main.py 100"
 
 # Log file paths
 LOG_FILE="/Users/simon/Desktop/personal/immo_datacollection/house_scraping_project/src/run_script.log"

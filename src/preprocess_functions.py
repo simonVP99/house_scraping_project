@@ -116,9 +116,11 @@ def preprocess(df):
     import statsmodels.formula.api as smf
 
     # Change format of 'date_obtained'
+    df['date_obtained'] = df['date_obtained'].astype(str)
+    df['date_obtained'] = df.date_obtained.str.zfill(8)
     df['date_obtained'] = pd.to_datetime(df['date_obtained'], format='%d%m%Y')
     df = df.sort_values('date_obtained')
-    df.drop_duplicates(subset=["property_id"], keep='last', inplace=True)
+    df.drop_duplicates(subset=["property_id"], keep='first', inplace=True)
 
     # Set 'price' as K (divide by 1000)
     df['price'] = df['price'] / 1000
@@ -213,6 +215,26 @@ def preprocess(df):
 
     # Add neighborhood information (assuming the function is defined)
     df = add_neighbourhood(df)
+
+    upper_limit = df['latitude'].quantile(0.99)
+    df = df[df['latitude'] <= upper_limit]
+
+    upper_limit = df['longitude'].quantile(0.99)
+    df = df[df['longitude'] <= upper_limit]
+
+    lower_limit = df['latitude'].quantile(0.01)
+    df = df[df['latitude'] >= lower_limit]
+
+    lower_limit = df['longitude'].quantile(0.01)
+    df = df[df['longitude'] >= lower_limit]
+
+    df['log_price'] = np.log(df.price)
+    upper_limit = df['log_price'].quantile(0.99)
+    df = df[df['log_price'] <= upper_limit]
+
+    
+    upper_limit = df['price_sq'].quantile(0.99)
+    df = df[df['price_sq'] <= upper_limit]
 
 
     return df
