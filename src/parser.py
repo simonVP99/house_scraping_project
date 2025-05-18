@@ -4,6 +4,7 @@ import json
 import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime
+from tqdm import tqdm
 
 def extract_info(file_path):
     """
@@ -242,7 +243,7 @@ def parse_data_folder(root_directory, output_file):
     data = []
     today = datetime.today().strftime('%d%m%Y')
     # Walk through the directory structure
-    for dirpath, dirnames, filenames in os.walk(root_directory):
+    for dirpath, dirnames, filenames in tqdm(os.walk(root_directory)):
         for filename in filenames:
             if filename.endswith('.html') and today in filename:
                 file_path = os.path.join(dirpath, filename)

@@ -109,7 +109,7 @@ def fill_missing_values_poisson(df_non_nan, df_nan, target_column, cols):
     
     return df_filled[target_column]
 
-def preprocess(df):
+def preprocess(df, keep = 'first'):
     import pandas as pd
     import numpy as np
     import statsmodels.api as sm
@@ -120,7 +120,7 @@ def preprocess(df):
     df['date_obtained'] = df.date_obtained.str.zfill(8)
     df['date_obtained'] = pd.to_datetime(df['date_obtained'], format='%d%m%Y')
     df = df.sort_values('date_obtained')
-    df.drop_duplicates(subset=["property_id"], keep='first', inplace=True)
+    df.drop_duplicates(subset=["property_id"], keep=keep, inplace=True)
 
     # Set 'price' as K (divide by 1000)
     df['price'] = df['price'] / 1000

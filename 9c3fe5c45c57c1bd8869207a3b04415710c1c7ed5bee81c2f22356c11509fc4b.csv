@@ -1,0 +1,7 @@
+Transaction Time (CET),Transaction Category,Transaction Type,Asset Id,Asset Name,Asset Currency,Transaction Currency,Currency Pair,Exchange Rate,Transaction Amount,Trade Amount,Trade Price,Trade Quantity,Cash Balance Amount,Profit And Loss Amount,Profit And Loss Currency,Transaction Description
+2025-04-17 16:00:15.948000,trades,Buy Trade,IE000BI8OT95,Amundi MSCI World,EUR,EUR,EUREUR,1.0,-785.96,785.96,112.28,7.0,284.76,,,Order Partial Id: 05f39257-e4e8-4450-a07e-1a1f37a2f4d1 - 1
+2025-04-17 16:00:15.950000,tax,Tob,IE000BI8OT95,Amundi MSCI World,,EUR,,,-0.94,,,,283.82,,,
+2025-05-01 10:31:24.354000,fees,Subscription Fee,,,,EUR,,,-2.99,,,,280.83,,,Period: 2025-04
+2025-05-07 08:00:29.039000,interest,Interest Payment,,,,EUR,,,0.61,,,,281.44,,,Period: 2025 M4
+2025-05-07 11:34:56.029000,dividends,Cash Dividend,BE0974362940,Barco,EUR,EUR,EUREUR,1.0,71.4,,,,352.84,,,
+2025-05-08 10:59:50.708000,dividends,Cash Dividend,BE0003565737,KBC,EUR,EUR,EUREUR,1.0,44.1,,,,396.94,,,
