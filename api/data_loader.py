@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import pandas as pd
 import numpy as np
 from shapely.geometry import shape, Point
@@ -7,6 +8,15 @@ from api.config import (
     EMBEDDINGS_CSV_PATH, TODAY_DEALS_CSV_PATH,
     NEIGHBOURHOOD_DATA_PATH,
 )
+
+
+def _clean_nan(records):
+    """Replace NaN/inf values with None in a list of dicts (JSON-safe)."""
+    for row in records:
+        for k, v in row.items():
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                row[k] = None
+    return records
 
 
 class DataLoader:
@@ -58,6 +68,17 @@ class DataLoader:
 
         if os.path.exists(TODAY_DEALS_CSV_PATH):
             self.today_deals_df = pd.read_csv(TODAY_DEALS_CSV_PATH)
+            # Merge predicted delta_pct into analytics_df for neighbourhood stats
+            if (
+                self.analytics_df is not None
+                and self.today_deals_df is not None
+                and "delta_pct" in self.today_deals_df.columns
+                and "property_id" in self.today_deals_df.columns
+                and "property_id" in self.analytics_df.columns
+            ):
+                delta_map = self.today_deals_df.set_index("property_id")["delta_pct"]
+                self.analytics_df["delta_pct"] = self.analytics_df["property_id"].map(delta_map)
+                self._compute_neighbourhood_summary()
 
     def _compute_neighbourhood_summary(self):
         """Aggregate per-neighbourhood statistics."""
@@ -180,7 +201,7 @@ class DataLoader:
                 "livable_area", "number_of_bedrooms", "building_condition", "energy_label",
             ] if c in deals.columns]
             deals = deals[display_cols].sort_values("delta_pct", ascending=False, na_position="last")
-            listings = deals.to_dict(orient="records")
+            listings = _clean_nan(deals.to_dict(orient="records"))
 
         return {
             "name": name,
@@ -201,7 +222,7 @@ class DataLoader:
         df = self.today_deals_df[display_cols].sort_values(
             "delta_pct", ascending=False, na_position="last"
         )
-        return df.to_dict(orient="records")
+        return _clean_nan(df.to_dict(orient="records"))
 
     def get_neighbourhood_spatial(self, lat, lon):
         """Find neighbourhood for a lat/lon via point-in-polygon."""
