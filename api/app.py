@@ -21,7 +21,48 @@ def create_app(loader=None, pred_service=None):
     if pred_service is not None:
         prediction_service = pred_service
     elif prediction_service is None:
-        prediction_service = PredictionService(data_loader=data_loader)
+        import os
+        from api.config import AUTOGLUON_PATH, PCA_PATH
+
+        ag_predictor = None
+        e5_model = None
+        e5_tokenizer = None
+        e5_device = None
+        pca_model = None
+
+        # Try loading AutoGluon model
+        try:
+            from autogluon.tabular import TabularPredictor
+            if os.path.exists(AUTOGLUON_PATH):
+                ag_predictor = TabularPredictor.load(AUTOGLUON_PATH)
+                print(f"AutoGluon model loaded from {AUTOGLUON_PATH}")
+        except Exception as e:
+            print(f"AutoGluon not available: {e}")
+
+        # Try loading E5 model + PCA for description embeddings
+        try:
+            import torch
+            from transformers import AutoTokenizer, AutoModel
+            import joblib
+            from api.config import E5_MODEL_NAME
+
+            if os.path.exists(PCA_PATH):
+                e5_device = "cuda" if torch.cuda.is_available() else "cpu"
+                e5_tokenizer = AutoTokenizer.from_pretrained(E5_MODEL_NAME)
+                e5_model = AutoModel.from_pretrained(E5_MODEL_NAME).to(e5_device)
+                pca_model = joblib.load(PCA_PATH)
+                print(f"E5 + PCA loaded ({e5_device})")
+        except Exception as e:
+            print(f"E5/PCA not available: {e}")
+
+        prediction_service = PredictionService(
+            ag_predictor=ag_predictor,
+            e5_model=e5_model,
+            e5_tokenizer=e5_tokenizer,
+            e5_device=e5_device,
+            pca_model=pca_model,
+            data_loader=data_loader,
+        )
 
     @app.route("/api/health")
     def health():
