@@ -49,7 +49,11 @@ def create_app(loader=None, pred_service=None, listings_service=None):
             from api.config import E5_MODEL_NAME
 
             if os.path.exists(PCA_PATH):
-                e5_device = "cuda" if torch.cuda.is_available() else "cpu"
+                e5_device = (
+                    "cuda" if torch.cuda.is_available()
+                    else "mps" if torch.backends.mps.is_available()
+                    else "cpu"
+                )
                 e5_tokenizer = AutoTokenizer.from_pretrained(E5_MODEL_NAME)
                 e5_model = AutoModel.from_pretrained(E5_MODEL_NAME).to(e5_device)
                 pca_model = joblib.load(PCA_PATH)
