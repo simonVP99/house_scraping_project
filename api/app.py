@@ -3,13 +3,15 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from api.data_loader import DataLoader
 from api.prediction import PredictionService
+from api.live_listings import LiveListingsService
 
 data_loader = None
 prediction_service = None
+live_listings_service = None
 
 
-def create_app(loader=None, pred_service=None):
-    global data_loader, prediction_service
+def create_app(loader=None, pred_service=None, listings_service=None):
+    global data_loader, prediction_service, live_listings_service
     app = Flask(__name__)
     CORS(app, origins=["http://localhost:5173"])
 
@@ -63,6 +65,14 @@ def create_app(loader=None, pred_service=None):
             pca_model=pca_model,
             data_loader=data_loader,
         )
+
+    if listings_service is not None:
+        live_listings_service = listings_service
+    elif live_listings_service is None:
+        try:
+            live_listings_service = LiveListingsService(prediction_service, data_loader)
+        except Exception as e:
+            print(f"Live listings not available: {e}")
 
     @app.route("/api/health")
     def health():
@@ -121,6 +131,27 @@ def create_app(loader=None, pred_service=None):
         form_data = request.get_json()
         result, status = prediction_service.predict_manual(form_data)
         return jsonify(result), status
+
+    @app.route("/api/listings/live")
+    def listings_live():
+        if live_listings_service is None:
+            return jsonify({"error": "Live listings not available"}), 503
+        neighbourhood = request.args.get("neighbourhood")
+        listings = live_listings_service.get_listings(neighbourhood)
+        return jsonify({"listings": listings, "date_used": live_listings_service.date_used})
+
+    @app.route("/api/listings/refresh", methods=["POST"])
+    def listings_refresh():
+        if live_listings_service is None:
+            return jsonify({"error": "Live listings not available"}), 503
+        result = live_listings_service.refresh()
+        return jsonify(result)
+
+    @app.route("/api/listings/count")
+    def listings_count():
+        if live_listings_service is None:
+            return jsonify({"count": 0, "date_used": None})
+        return jsonify(live_listings_service.get_count())
 
     return app
 
