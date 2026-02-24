@@ -46,12 +46,12 @@ const columns: ColumnDef<LiveListing>[] = [
   },
   {
     accessorKey: "asking_price",
-    header: "Asking",
+    header: "Asking (\u20AC)",
     cell: ({ getValue }) => fmtEur(getValue() as number),
   },
   {
     accessorKey: "predicted_price",
-    header: "Predicted",
+    header: "Predicted (\u20AC)",
     cell: ({ getValue }) => fmtEur(getValue() as number),
   },
   {

@@ -8,7 +8,7 @@ import PriceTrendChart from "./PriceTrendChart";
 import LiveListingsTable from "./LiveListingsTable";
 import { useNeighbourhoodDetail } from "../hooks/useNeighbourhoods";
 import { useLiveListings, useRefreshListings } from "../hooks/useLiveListings";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, ExternalLink } from "lucide-react";
 
 interface Props {
   name: string;
@@ -106,10 +106,10 @@ export default function NeighbourhoodDetail({ name }: Props) {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>ID</TableHead>
+                      <TableHead>Property</TableHead>
                       <TableHead className="text-right">Price (k\u20AC)</TableHead>
                       <TableHead className="text-right">Predicted (k\u20AC)</TableHead>
-                      <TableHead className="text-right">Delta %</TableHead>
+                      <TableHead className="text-right">\u0394 %</TableHead>
                       <TableHead className="text-right">Area (m\u00B2)</TableHead>
                       <TableHead className="text-right">Beds</TableHead>
                       <TableHead>Condition</TableHead>
@@ -119,7 +119,17 @@ export default function NeighbourhoodDetail({ name }: Props) {
                   <TableBody>
                     {overviewListings.map((l) => (
                       <TableRow key={l.property_id}>
-                        <TableCell>{l.property_id}</TableCell>
+                        <TableCell>
+                          <a
+                            href={`https://www.immoweb.be/nl/zoekertje/property/te-koop/gent/9000/${l.property_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                          >
+                            {l.property_id}
+                            <ExternalLink className="h-3 w-3 flex-shrink-0" />
+                          </a>
+                        </TableCell>
                         <TableCell className="text-right">{l.price?.toFixed(0)}</TableCell>
                         <TableCell className="text-right">{l.predicted_k?.toFixed(0)}</TableCell>
                         <TableCell className="text-right">
