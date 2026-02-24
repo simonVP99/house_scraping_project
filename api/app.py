@@ -1,14 +1,55 @@
-from flask import Flask, jsonify
+import pandas as pd
+from flask import Flask, jsonify, request
 from flask_cors import CORS
+from api.data_loader import DataLoader
+
+data_loader = None
 
 
-def create_app():
+def create_app(loader=None):
+    global data_loader
     app = Flask(__name__)
     CORS(app, origins=["http://localhost:5173"])
+
+    if loader is not None:
+        data_loader = loader
+    elif data_loader is None:
+        data_loader = DataLoader()
 
     @app.route("/api/health")
     def health():
         return jsonify({"status": "ok"})
+
+    @app.route("/api/stats")
+    def stats():
+        return jsonify(data_loader.get_stats())
+
+    @app.route("/api/neighbourhoods")
+    def neighbourhoods():
+        summary = data_loader.neighbourhood_summary
+        if summary is None:
+            return jsonify({"neighbourhoods": []})
+
+        result = []
+        for _, row in summary.iterrows():
+            nbh = row["neighbourhood"]
+            geojson = data_loader.get_neighbourhood_geojson(nbh)
+            result.append({
+                "name": nbh,
+                "count": int(row["count"]),
+                "median_price_k": float(row["median_price_k"]),
+                "median_price_sqm": float(row.get("median_price_sqm", 0)),
+                "avg_listing_duration": float(row.get("avg_listing_duration", 0)),
+                "median_listing_duration": float(row.get("median_listing_duration", 0)),
+                "pct_under_option": float(row.get("pct_under_option", 0)),
+                "median_delta_pct": float(row.get("median_delta_pct", 0))
+                    if not pd.isna(row.get("median_delta_pct")) else None,
+                "pct_underpriced": float(row.get("pct_underpriced", 0))
+                    if not pd.isna(row.get("pct_underpriced")) else None,
+                "geojson": geojson,
+            })
+
+        return jsonify({"neighbourhoods": result})
 
     return app
 
