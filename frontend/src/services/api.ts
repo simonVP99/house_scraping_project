@@ -1,6 +1,6 @@
 import type { PredictionResult, ManualPredictionResult } from "../types/prediction";
 import type { NeighbourhoodSummary, NeighbourhoodDetail, DashboardStats } from "../types/neighbourhood";
-import type { TodayDeal } from "../types/property";
+import type { TodayDeal, LiveListing } from "../types/property";
 
 const BASE = "/api";
 
@@ -36,4 +36,19 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(formData),
     }),
+
+  getLiveListings: (neighbourhood?: string) => {
+    const params = neighbourhood ? `?neighbourhood=${encodeURIComponent(neighbourhood)}` : "";
+    return fetchJson<{ listings: LiveListing[]; date_used: string | null }>(
+      `${BASE}/listings/live${params}`,
+    ).then((r) => r.listings);
+  },
+
+  refreshListings: () =>
+    fetchJson<{ count: number; date_used: string | null }>(`${BASE}/listings/refresh`, {
+      method: "POST",
+    }),
+
+  getListingsCount: () =>
+    fetchJson<{ count: number; date_used: string | null }>(`${BASE}/listings/count`),
 };
