@@ -110,7 +110,7 @@ class DataLoader:
             "avg_listing_duration": round(float(df["listing_duration_days"].mean()), 1),
             "pct_under_option": round(float(df["is_under_option"].mean() * 100), 1),
             "median_delta_pct": round(
-                float(df["delta_pct"].median()) if df["delta_pct"].notna().any() else 0, 1
+                float(df["delta_pct"].median()) if "delta_pct" in df.columns and df["delta_pct"].notna().any() else 0, 1
             ),
         }
 
