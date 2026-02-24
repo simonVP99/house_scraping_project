@@ -2,6 +2,7 @@ import { useState } from "react";
 import KpiStrip from "../components/KpiStrip";
 import NeighbourhoodMap from "../components/NeighbourhoodMap";
 import ComparisonTable from "../components/ComparisonTable";
+import NeighbourhoodDetail from "../components/NeighbourhoodDetail";
 import { useStats } from "../hooks/useStats";
 import { useNeighbourhoods } from "../hooks/useNeighbourhoods";
 
@@ -30,12 +31,7 @@ export default function NeighbourhoodsPage() {
         <ComparisonTable neighbourhoods={neighbourhoods} onSelect={setSelectedNbh} />
       )}
 
-      {/* NeighbourhoodDetail added in next task */}
-      {selectedNbh && (
-        <div className="text-sm text-muted-foreground">
-          Selected: {selectedNbh} (detail view coming next)
-        </div>
-      )}
+      {selectedNbh && <NeighbourhoodDetail name={selectedNbh} />}
     </div>
   );
 }
