@@ -34,7 +34,7 @@ class PredictionService:
             html = self._fetch_page(url)
             parsed = self._parse_immoweb_html(html, url)
             features_df, asking_price = self._prepare_features(parsed)
-            predicted_k = self.ag_predictor.predict(features_df).values[0]
+            predicted_k = float(self.ag_predictor.predict(features_df).values[0])
             predicted_eur = predicted_k * 1000
 
             result = {
@@ -54,7 +54,7 @@ class PredictionService:
                 "prediction": {
                     "predicted_price": round(predicted_eur),
                     "delta_eur": round(predicted_eur - asking_price) if asking_price else None,
-                    "delta_pct": round((predicted_eur - asking_price) / asking_price * 100, 1) if asking_price else None,
+                    "delta_pct": round(float((predicted_eur - asking_price) / asking_price * 100), 1) if asking_price else None,
                 },
                 "form_data": parsed,
             }
