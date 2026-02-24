@@ -122,6 +122,87 @@ class DataLoader:
                 return json.loads(json.dumps(poly.__geo_interface__))
         return None
 
+    def get_neighbourhood_detail(self, name):
+        """Return deep-dive data for a single neighbourhood."""
+        df = self.analytics_df
+        if df is None:
+            return None
+
+        nbh_df = df[df["neighbourhood"] == name]
+        if len(nbh_df) == 0:
+            return None
+
+        # Stats
+        stats = {
+            "count": len(nbh_df),
+            "median_price_k": round(float(nbh_df["price"].median()), 1),
+            "min_price_k": round(float(nbh_df["price"].min()), 1),
+            "max_price_k": round(float(nbh_df["price"].max()), 1),
+            "avg_area": round(float(nbh_df["livable_area"].mean()), 0),
+            "avg_age": round(float(nbh_df["age"].mean()), 0) if "age" in nbh_df.columns else None,
+            "top_condition": nbh_df["building_condition"].mode().iloc[0]
+                if "building_condition" in nbh_df.columns and len(nbh_df["building_condition"].dropna()) > 0
+                else None,
+            "top_energy_label": nbh_df["energy_label"].mode().iloc[0]
+                if "energy_label" in nbh_df.columns and len(nbh_df["energy_label"].dropna()) > 0
+                else None,
+        }
+
+        # Monthly price trend: neighbourhood vs city
+        trend = []
+        df_dated = df[df["date_obtained"].notna()].copy()
+        if len(df_dated) > 0:
+            df_dated["date_obtained"] = pd.to_datetime(df_dated["date_obtained"], errors="coerce")
+            df_dated = df_dated[df_dated["date_obtained"].notna()]
+            df_dated["month"] = df_dated["date_obtained"].dt.to_period("M").astype(str)
+
+            city_trend = df_dated.groupby("month")["price"].median().reset_index()
+            nbh_dated = df_dated[df_dated["neighbourhood"] == name]
+            nbh_trend = nbh_dated.groupby("month")["price"].median().reset_index()
+
+            months = sorted(set(city_trend["month"].tolist() + nbh_trend["month"].tolist()))
+            city_dict = dict(zip(city_trend["month"], city_trend["price"]))
+            nbh_dict = dict(zip(nbh_trend["month"], nbh_trend["price"]))
+
+            for m in months:
+                trend.append({
+                    "month": m,
+                    "city_median_price_k": round(float(city_dict.get(m, 0)), 1) if m in city_dict else None,
+                    "neighbourhood_median_price_k": round(float(nbh_dict.get(m, 0)), 1) if m in nbh_dict else None,
+                })
+
+        # Listings from today_deals
+        listings = []
+        if self.today_deals_df is not None and len(self.today_deals_df) > 0:
+            deals = self.today_deals_df[self.today_deals_df["neighbourhood"] == name]
+            display_cols = [c for c in [
+                "property_id", "price", "predicted_k", "delta_pct",
+                "livable_area", "number_of_bedrooms", "building_condition", "energy_label",
+            ] if c in deals.columns]
+            deals = deals[display_cols].sort_values("delta_pct", ascending=False, na_position="last")
+            listings = deals.to_dict(orient="records")
+
+        return {
+            "name": name,
+            "stats": stats,
+            "trend": trend,
+            "listings": listings,
+        }
+
+    def get_today_deals(self):
+        """Return today's deals sorted by delta."""
+        if self.today_deals_df is None:
+            return []
+        display_cols = [c for c in [
+            "property_id", "price", "predicted_k", "delta_pct",
+            "livable_area", "number_of_bedrooms", "building_condition", "energy_label",
+            "neighbourhood", "postal_code",
+        ] if c in self.today_deals_df.columns]
+        df = self.today_deals_df[display_cols].sort_values(
+            "delta_pct", ascending=False, na_position="last"
+        )
+        return df.to_dict(orient="records")
+
     def get_neighbourhood_spatial(self, lat, lon):
         """Find neighbourhood for a lat/lon via point-in-polygon."""
         point = Point(lon, lat)

@@ -51,6 +51,17 @@ def create_app(loader=None):
 
         return jsonify({"neighbourhoods": result})
 
+    @app.route("/api/neighbourhoods/<name>")
+    def neighbourhood_detail(name):
+        detail = data_loader.get_neighbourhood_detail(name)
+        if detail is None:
+            return jsonify({"error": "Neighbourhood not found"}), 404
+        return jsonify(detail)
+
+    @app.route("/api/properties/today")
+    def today_deals():
+        return jsonify({"properties": data_loader.get_today_deals()})
+
     return app
 
 
