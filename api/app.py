@@ -2,12 +2,14 @@ import pandas as pd
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from api.data_loader import DataLoader
+from api.prediction import PredictionService
 
 data_loader = None
+prediction_service = None
 
 
-def create_app(loader=None):
-    global data_loader
+def create_app(loader=None, pred_service=None):
+    global data_loader, prediction_service
     app = Flask(__name__)
     CORS(app, origins=["http://localhost:5173"])
 
@@ -15,6 +17,11 @@ def create_app(loader=None):
         data_loader = loader
     elif data_loader is None:
         data_loader = DataLoader()
+
+    if pred_service is not None:
+        prediction_service = pred_service
+    elif prediction_service is None:
+        prediction_service = PredictionService(data_loader=data_loader)
 
     @app.route("/api/health")
     def health():
@@ -61,6 +68,18 @@ def create_app(loader=None):
     @app.route("/api/properties/today")
     def today_deals():
         return jsonify({"properties": data_loader.get_today_deals()})
+
+    @app.route("/api/predict/url")
+    def predict_url():
+        url = request.args.get("url")
+        result, status = prediction_service.predict_from_url(url)
+        return jsonify(result), status
+
+    @app.route("/api/predict/manual", methods=["POST"])
+    def predict_manual():
+        form_data = request.get_json()
+        result, status = prediction_service.predict_manual(form_data)
+        return jsonify(result), status
 
     return app
 
