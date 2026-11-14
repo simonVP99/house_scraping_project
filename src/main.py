@@ -2,7 +2,7 @@ import argparse
 import time
 import os
 from scraper import scrape_houses
-from parser import parse_data_folder
+from parser import parse_data_folder_parallel
 
 def main():
     # Parse command-line arguments
@@ -11,7 +11,7 @@ def main():
     args = parser.parse_args()
 
     # Define absolute paths
-    base_dir = '/Users/simon/Desktop/personal/immo_datacollection/house_scraping_project'
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_folder = os.path.join(base_dir, 'data')
     output_file = os.path.join(base_dir, 'outputs/property_data_raw.csv')
 
@@ -19,7 +19,7 @@ def main():
     scrape_houses(args.num_pages)
     print('Start Parsing House Data')
     start_time = time.time()
-    df = parse_data_folder(data_folder, output_file)
+    df = parse_data_folder_parallel(data_folder, output_file)
     end_time = time.time()
     duration = end_time - start_time
     print(f"Time taken to parse data folder: {duration:.2f} seconds")

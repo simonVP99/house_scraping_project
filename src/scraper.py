@@ -1,56 +1,179 @@
 import os
-import requests
-from bs4 import BeautifulSoup
+import time
+import random
+import re
+import subprocess
 from datetime import datetime
 
+from bs4 import BeautifulSoup
+import undetected_chromedriver as uc
+
+# --- Constants ---
 BASE_URL = "https://www.immoweb.be/en/search/house-and-apartment/for-sale/gent/9000?countries=BE&isNewlyBuilt=false&page="
-BASE_DIR = '/Users/simon/Desktop/personal/immo_datacollection/house_scraping_project'
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def get_chrome_major_version():
+    """Detect installed Chrome major version on macOS."""
+    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if os.path.exists(chrome_path):
+        try:
+            res = subprocess.run([chrome_path, "--version"], capture_output=True, text=True, check=True)
+            match = re.search(r'(\d+)\.', res.stdout)
+            if match:
+                return int(match.group(1))
+        except Exception as e:
+            print(f"Failed to detect Chrome version automatically: {e}")
+    return None
+
+
+def setup_driver():
+    """
+    Initializes an undetected Chrome browser to bypass DataDome CAPTCHA.
+    Runs in non-headless mode since headless is detected by DataDome.
+    """
+    options = uc.ChromeOptions()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+
+    # Match driver to installed Chrome major version to prevent mismatch on browser updates
+    chrome_version = get_chrome_major_version()
+    if chrome_version:
+        driver = uc.Chrome(options=options, version_main=chrome_version)
+    else:
+        driver = uc.Chrome(options=options)
+    print(f"Undetected Chrome browser initialized (version_main={chrome_version}).")
+    return driver
+
 
 def parse_page(html):
+    """Parses the search results page to find individual property URLs."""
     soup = BeautifulSoup(html, 'html.parser')
-    properties = soup.find_all('a', class_='card__title-link')
-    property_urls = [property.get('href') for property in properties if property.get('href')]
-    return property_urls
+    # Find all links pointing to classified property pages
+    links = [a.get('href') for a in soup.find_all('a', href=True)
+             if '/classified/' in a.get('href', '')]
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for link in links:
+        if link not in seen:
+            seen.add(link)
+            unique.append(link)
+    return unique
 
-def save_house_data(house_url):
-    headers = {'User-Agent': 'Mozilla/5.0 (compatible; immo/1.0; +http://yourwebsite.com/bot)'}
+
+def save_house_data(driver, house_url):
+    """Fetches and saves the HTML for a single property page."""
     today = datetime.today().strftime('%d%m%Y')
-
     try:
-        response = requests.get(house_url, headers=headers)
-        response.raise_for_status()
+        print(f"  -> Navigating to property: {house_url}")
+        driver.get(house_url)
+        # Polite wait for dynamic content to load
+        time.sleep(random.uniform(4, 7))
 
-        # Extract property ID from URL
+        html_content = driver.page_source
+
+        # Check if we got blocked on the individual page
+        if 'captcha-delivery' in html_content or len(html_content) < 2000:
+            print(f"  -> WARNING: Possible CAPTCHA on property page, skipping.")
+            return False
+
         property_id = house_url.split('/')[-1]
-
-        # Create a directory for the property using its unique ID
         directory = os.path.join(BASE_DIR, 'data', property_id)
         os.makedirs(directory, exist_ok=True)
 
-        # Save the full HTML source to a file
         file_path = os.path.join(directory, f"full_source_{today}.html")
         with open(file_path, "w", encoding="utf-8") as file:
-            file.write(response.text)
+            file.write(html_content)
 
-        print(f"Full source code saved to {file_path}")
+        print(f"  -> Saved source for property {property_id}")
+        return True
 
-    except requests.RequestException as e:
-        print(f"Error fetching the URL {house_url}: {e}")
+    except Exception as e:
+        print(f"  -> Error fetching {house_url}: {e}")
+        return False
 
-def scrape_houses(num_pages):
-    page = 1
-    while page <= num_pages:
-        url = BASE_URL + str(page)
-        try:
-            response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; immo/1.0; +http://yourwebsite.com/bot)'})
-            response.raise_for_status()
-            houses = parse_page(response.text)
-            if not houses:
-                break  # Exit loop if no more houses are found
-            for house in houses:
-                save_house_data(house)
-            page += 1
-            print(f'Completed Page: {page-1}, Starting Page: {page}')
-        except requests.RequestException as e:
-            print(f"Error during request to {url}: {e}")
-            break
+
+def scrape_houses(num_pages, start_page=1):
+    """
+    Main scraping function with polite delays to avoid triggering bot detection.
+    Uses undetected-chromedriver in non-headless mode to bypass DataDome.
+    """
+    driver = setup_driver()
+    total_saved = 0
+    consecutive_failures = 0
+
+    try:
+        page = start_page
+        while page <= num_pages:
+            url = BASE_URL + str(page)
+            print(f"\n--- Scraping search results page {page}/{num_pages} ---")
+
+            try:
+                driver.get(url)
+                # Polite wait for search results to load
+                time.sleep(random.uniform(8, 12))
+
+                html_content = driver.page_source
+
+                # Check if blocked by CAPTCHA
+                if 'captcha-delivery' in html_content or len(html_content) < 2000:
+                    print(f"BLOCKED by DataDome CAPTCHA on page {page}.")
+                    with open(os.path.join(BASE_DIR, "debug_blocked_page.html"), "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        print("3 consecutive blocks. Stopping to avoid IP ban.")
+                        break
+                    # Back off and retry
+                    print(f"  Backing off for 60-90 seconds before retry...")
+                    time.sleep(random.uniform(60, 90))
+                    continue
+
+                house_urls = parse_page(html_content)
+                if not house_urls:
+                    print("No property links found on this page. Ending scrape.")
+                    with open(os.path.join(BASE_DIR, "debug_no_links_found.html"), "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    break
+
+                consecutive_failures = 0
+                print(f"Found {len(house_urls)} properties. Fetching individual pages...")
+
+                for i, house_url in enumerate(house_urls):
+                    success = save_house_data(driver, house_url)
+                    if success:
+                        total_saved += 1
+
+                    # Polite delay between property pages (5-10 seconds)
+                    delay = random.uniform(5, 10)
+                    if (i + 1) % 10 == 0:
+                        # Extra pause every 10 properties
+                        delay = random.uniform(15, 25)
+                        print(f"  -- Polite pause after {i+1} properties --")
+                    time.sleep(delay)
+
+                # Polite delay between search pages (10-20 seconds)
+                between_pages_delay = random.uniform(10, 20)
+                print(f"  Waiting {between_pages_delay:.0f}s before next page...")
+                time.sleep(between_pages_delay)
+
+                page += 1
+
+            except Exception as e:
+                print(f"Error on search page {page}: {e}")
+                try:
+                    driver.save_screenshot(os.path.join(BASE_DIR, 'debug_error_screenshot.png'))
+                except Exception:
+                    pass
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    print("3 consecutive errors. Stopping.")
+                    break
+                time.sleep(random.uniform(30, 60))
+
+    finally:
+        print(f"\nScraping complete. Total properties saved: {total_saved}")
+        print("Closing browser.")
+        driver.quit()
