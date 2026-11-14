@@ -1,5 +1,5 @@
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 
 interface TrendPoint {
   month: string;
@@ -12,27 +12,50 @@ interface Props {
   neighbourhoodName: string;
 }
 
+// Terracotta primary and warm muted for city-wide
+const COLOR_NEIGHBOURHOOD = "#9a4a2a"; // warm terracotta
+const COLOR_CITY = "#b8a596"; // warm muted stone
+
 export default function PriceTrendChart({ data, neighbourhoodName }: Props) {
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
+      <CardContent className="pt-6">
+        <h3 className="font-display text-base font-semibold mb-4">
           Monthly Median Price: {neighbourhoodName.replace(/_/g, " ")} vs City
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <ResponsiveContainer width="100%" height={350}>
+        </h3>
+        <ResponsiveContainer width="100%" height={300}>
           <LineChart data={data}>
-            <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} />
-            <Tooltip />
-            <Legend />
+            <XAxis
+              dataKey="month"
+              tick={{ fontSize: 11, fill: "#8a7a6e" }}
+              axisLine={{ stroke: "#d6cdc4" }}
+              tickLine={{ stroke: "#d6cdc4" }}
+            />
+            <YAxis
+              tick={{ fontSize: 11, fill: "#8a7a6e" }}
+              axisLine={{ stroke: "#d6cdc4" }}
+              tickLine={{ stroke: "#d6cdc4" }}
+              tickFormatter={(v) => `${v}k`}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "#faf8f5",
+                border: "1px solid #d6cdc4",
+                borderRadius: "6px",
+                fontSize: "12px",
+              }}
+              formatter={(value) => `${Number(value ?? 0).toFixed(0)}k`}
+            />
+            <Legend
+              wrapperStyle={{ fontSize: "12px" }}
+            />
             <Line
               type="monotone"
               dataKey="city_median_price_k"
               name="City-wide"
-              stroke="#94a3b8"
-              strokeWidth={2}
+              stroke={COLOR_CITY}
+              strokeWidth={1.5}
+              strokeDasharray="4 3"
               dot={false}
               connectNulls
             />
@@ -40,7 +63,7 @@ export default function PriceTrendChart({ data, neighbourhoodName }: Props) {
               type="monotone"
               dataKey="neighbourhood_median_price_k"
               name={neighbourhoodName.replace(/_/g, " ")}
-              stroke="#3b82f6"
+              stroke={COLOR_NEIGHBOURHOOD}
               strokeWidth={2.5}
               dot={false}
               connectNulls

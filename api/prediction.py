@@ -11,7 +11,9 @@ from datetime import datetime
 class PredictionService:
     def __init__(self, ag_predictor=None, old_model=None, old_options=None,
                  old_features=None, e5_model=None, e5_tokenizer=None,
-                 e5_device=None, pca_model=None, data_loader=None):
+                 e5_device=None, pca_model=None, data_loader=None,
+                 imputation_models=None, street_graph_path=None,
+                 shap_artifact=None):
         self.ag_predictor = ag_predictor
         self.old_model = old_model
         self.old_options = old_options or {}
@@ -21,6 +23,14 @@ class PredictionService:
         self.e5_device = e5_device
         self.pca_model = pca_model
         self.data_loader = data_loader
+        self.imputation_models = imputation_models or {}
+        self.street_graph_path = street_graph_path
+        self._street_graph = None
+        self._street_edges = None
+        self.shap_artifact = shap_artifact
+        self._shap_explainer = None
+        self._macro_cache = None
+        self._macro_fetched_date = None
 
     def predict_from_url(self, url):
         """Fetch Immoweb URL, parse, predict. Returns (result_dict, status_code)."""
@@ -66,6 +76,9 @@ class PredictionService:
                 if nbh:
                     result["property"]["neighbourhood"] = nbh
 
+            # Add explainability
+            self._add_explainability(result, parsed, features_df)
+
             return result, 200
 
         except requests.exceptions.HTTPError as e:
@@ -74,6 +87,50 @@ class PredictionService:
             return {"error": f"HTTP error: {e}"}, 502
         except ValueError as e:
             return {"error": str(e)}, 422
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}, 500
+
+    def predict_from_form_data(self, form_data):
+        """Re-predict from edited form_data using AutoGluon (same path as URL prediction)."""
+        if self.ag_predictor is None:
+            return {"error": "AutoGluon model not loaded"}, 503
+
+        try:
+            features_df, asking_price = self._prepare_features(form_data)
+            predicted_k = float(self.ag_predictor.predict(features_df).values[0])
+            predicted_eur = predicted_k * 1000
+
+            result = {
+                "property": {
+                    "property_id": form_data.get("property_id"),
+                    "address": f"{form_data.get('street', '')} {form_data.get('house_number', '')}, {form_data.get('postal_code', '')} {form_data.get('city', '')}".strip(),
+                    "price": asking_price,
+                    "livable_area": form_data.get("livable_area"),
+                    "bedrooms": form_data.get("number_of_bedrooms"),
+                    "year_built": form_data.get("year_built"),
+                    "condition": form_data.get("building_condition"),
+                    "energy_label": form_data.get("energy_label"),
+                    "property_type": form_data.get("property_type"),
+                    "property_subtype": form_data.get("property_subtype"),
+                    "neighbourhood": None,
+                },
+                "prediction": {
+                    "predicted_price": round(predicted_eur),
+                    "delta_eur": round(predicted_eur - asking_price) if asking_price else None,
+                    "delta_pct": round(float((predicted_eur - asking_price) / asking_price * 100), 1) if asking_price else None,
+                },
+                "form_data": form_data,
+            }
+
+            lat, lon = form_data.get("latitude"), form_data.get("longitude")
+            if lat and lon and self.data_loader:
+                nbh = self.data_loader.get_neighbourhood_spatial(float(lat), float(lon))
+                if nbh:
+                    result["property"]["neighbourhood"] = nbh
+
+            self._add_explainability(result, form_data, features_df)
+
+            return result, 200
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}, 500
 
@@ -270,8 +327,15 @@ class PredictionService:
         else:
             row["neighbourhood"] = "Unknown"
 
-        row["street_type"] = self._get_street_type(parsed.get("street", ""))
-        row["distance_to_street"] = 0
+        # Street type: spatial lookup via OSMnx (falls back to heuristic)
+        lat, lon = row.get("latitude"), row.get("longitude")
+        if lat and lon:
+            street_type, distance = self._lookup_street_type(lat, lon)
+            row["street_type"] = street_type
+            row["distance_to_street"] = distance
+        else:
+            row["street_type"] = self._get_street_type(parsed.get("street", ""))
+            row["distance_to_street"] = 0
 
         pub_date = parsed.get("publication_date")
         mod_date = parsed.get("last_modification_date")
@@ -293,9 +357,24 @@ class PredictionService:
             row[f"desc_emb_{i}"] = emb[i]
         row["has_meaningful_description"] = 1 if description and len(str(description)) > 50 else 0
 
-        # Macro indicators (best-effort)
+        # Spatial lag from training data
+        lat, lon = row.get("latitude"), row.get("longitude")
+        if lat and lon and self.data_loader:
+            spatial_lag, avg_dist = self.data_loader.compute_spatial_lag(lat, lon)
+            row["spatial_lag_10"] = spatial_lag
+            row["avg_dist_5nn"] = avg_dist
+        else:
+            row["spatial_lag_10"] = None
+            row["avg_dist_5nn"] = None
+
+        # Macro indicators from ECB (cached at startup)
+        macro = self._get_macro_indicators()
         for col in ["belgian_cpi_index", "belgian_10y_yield", "euribor_12m"]:
-            row[col] = None
+            row[col] = macro.get(col)
+
+        # Apply pipeline-equivalent imputation for missing values
+        if self.imputation_models:
+            row = self._impute_missing(row, asking_price_eur, row.get("livable_area"))
 
         df = pd.DataFrame([row])
         return df, asking_price_eur
@@ -327,6 +406,379 @@ class PredictionService:
         embedding = embedding.cpu().numpy()
 
         return self.pca_model.transform(embedding)[0]
+
+    def _get_macro_indicators(self):
+        """Fetch latest macro indicators from ECB, cached daily."""
+        from datetime import date
+        today = date.today().isoformat()
+        if self._macro_cache is not None and self._macro_fetched_date == today:
+            return self._macro_cache
+
+        indicators = {
+            'belgian_cpi_index': 'https://data-api.ecb.europa.eu/service/data/ICP/M.BE.N.000000.4.INX?startPeriod=2024-01&format=csvdata',
+            'belgian_10y_yield': 'https://data-api.ecb.europa.eu/service/data/IRS/M.BE.L.L40.CI.0000.EUR.N.Z?startPeriod=2024-01&format=csvdata',
+            'euribor_12m': 'https://data-api.ecb.europa.eu/service/data/FM/M.U2.EUR.RT.MM.EURIBOR1YD_.HSTA?startPeriod=2024-01&format=csvdata',
+        }
+        result = {}
+        for col, url in indicators.items():
+            try:
+                import requests, csv, io
+                # requests ships certifi's CA bundle, so this verifies correctly on
+                # macOS Pythons that do not have root certs installed system-wide
+                # (urllib would raise CERTIFICATE_VERIFY_FAILED here).
+                resp = requests.get(url, headers={'Accept': 'text/csv'}, timeout=10)
+                resp.raise_for_status()
+                reader = csv.DictReader(io.StringIO(resp.text))
+                values = {row['TIME_PERIOD']: float(row['OBS_VALUE']) for row in reader}
+                if values:
+                    latest_key = max(values.keys())
+                    result[col] = values[latest_key]
+                    print(f"  Macro {col}: {result[col]} ({latest_key})")
+            except Exception as e:
+                print(f"  Macro {col} fetch failed: {e}")
+                result[col] = None
+
+        self._macro_cache = result
+        self._macro_fetched_date = today
+        return result
+
+    def _compute_shap(self, features_df):
+        """Compute SHAP values using the standalone XGBoost model."""
+        if not self.shap_artifact:
+            return None
+        try:
+            import shap
+            model = self.shap_artifact['model']
+            feature_names = self.shap_artifact['feature_names']
+            encoders = self.shap_artifact['label_encoders']
+            base_value = self.shap_artifact['base_value']
+
+            # Build a row matching the XGBoost's expected features
+            row_dict = {}
+            for col in feature_names:
+                if col in features_df.columns:
+                    row_dict[col] = features_df[col].iloc[0]
+                else:
+                    row_dict[col] = np.nan
+
+            xgb_df = pd.DataFrame([row_dict])
+
+            # Coerce numeric columns that may be object type due to None values
+            for col in xgb_df.columns:
+                if col not in encoders:
+                    xgb_df[col] = pd.to_numeric(xgb_df[col], errors='coerce')
+
+            # Encode categoricals the same way as training
+            for col, le in encoders.items():
+                if col in xgb_df.columns:
+                    val = xgb_df[col].iloc[0]
+                    if pd.isna(val) or val is None:
+                        val = '_missing_'
+                    val = str(val)
+                    if val in le.classes_:
+                        xgb_df[col] = le.transform([val])
+                    else:
+                        xgb_df[col] = le.transform(['_missing_']) if '_missing_' in le.classes_ else 0
+
+            # Bool to int
+            for col in xgb_df.columns:
+                if xgb_df[col].dtype == bool:
+                    xgb_df[col] = xgb_df[col].astype(int)
+
+            # Lazy-init explainer
+            if self._shap_explainer is None:
+                self._shap_explainer = shap.TreeExplainer(model)
+
+            shap_values = self._shap_explainer.shap_values(xgb_df)
+            vals = shap_values[0]
+
+            # Human-readable feature name mapping
+            name_map = {
+                'livable_area': 'Livable area',
+                'number_of_bedrooms': 'Bedrooms',
+                'number_of_bathrooms': 'Bathrooms',
+                'number_of_toilets': 'Toilets',
+                'age': 'Age',
+                'year_built': 'Year built',
+                'building_condition': 'Condition',
+                'energy_label': 'Energy label',
+                'primary_energy_consumption': 'Energy consumption',
+                'dist_from_center': 'Distance from center',
+                'neighbourhood': 'Neighbourhood',
+                'property_type_HOUSE': 'Property type',
+                'property_subtype': 'Subtype',
+                'postal_code': 'Postal code',
+                'has_garden': 'Garden',
+                'garden_surface': 'Garden area',
+                'has_terrace': 'Terrace',
+                'terrace_surface': 'Terrace area',
+                'has_swimming_pool': 'Swimming pool',
+                'parking_indoor': 'Indoor parking',
+                'parking_outdoor': 'Outdoor parking',
+                'facade_count': 'Facades',
+                'total_floors': 'Total floors',
+                'has_lift': 'Lift',
+                'has_double_glazing': 'Double glazing',
+                'has_photovoltaic_panels': 'Solar panels',
+                'has_heat_pump': 'Heat pump',
+                'cadastral_income': 'Cadastral income',
+                'kitchen_type': 'Kitchen type',
+                'kitchen_surface': 'Kitchen area',
+                'living_room_surface': 'Living room area',
+                'heating_type': 'Heating type',
+                'street_type': 'Street type',
+                'property_size': 'Plot size',
+                'street_facade_width': 'Street facade width',
+                'floor_number': 'Floor number',
+                'monthly_costs': 'Monthly costs',
+                'is_newly_built': 'Newly built',
+                'has_basement': 'Basement',
+                'has_attic': 'Attic',
+                'flood_zone_type': 'Flood zone',
+                'renovation_obligation': 'Renovation obligation',
+                'listing_duration_days': 'Listing duration',
+            }
+
+            # Sort by absolute value, take top 15 (skip desc_emb_*)
+            pairs = []
+            for feat, val in zip(feature_names, vals):
+                if feat.startswith('desc_emb_') or feat.startswith('belgian_') or feat.startswith('euribor'):
+                    continue
+                pairs.append((feat, float(val)))
+            pairs.sort(key=lambda x: abs(x[1]), reverse=True)
+
+            shap_items = []
+            for feat, val in pairs[:15]:
+                label = name_map.get(feat, feat.replace('_', ' ').title())
+                shap_items.append({
+                    'feature': label,
+                    'feature_key': feat,
+                    'value_k': round(val, 2),
+                    'value_eur': round(val * 1000),
+                })
+
+            # Also sum the skipped embedding/macro features
+            other_sum = sum(v for f, v in zip(feature_names, vals)
+                           if f.startswith('desc_emb_') or f.startswith('belgian_') or f.startswith('euribor'))
+            if abs(other_sum) > 0.5:
+                shap_items.append({
+                    'feature': 'Description & macro',
+                    'feature_key': '_other',
+                    'value_k': round(float(other_sum), 2),
+                    'value_eur': round(float(other_sum) * 1000),
+                })
+
+            return {
+                'base_value_k': round(float(base_value), 1),
+                'base_value_eur': round(float(base_value) * 1000),
+                'features': shap_items,
+            }
+        except Exception as e:
+            print(f"SHAP computation failed: {e}")
+            return None
+
+    def _add_explainability(self, result, parsed, features_df=None):
+        """Add comparables, feature context, and SHAP values to a prediction result."""
+        if not self.data_loader:
+            return
+        nbh = result["property"].get("neighbourhood")
+        prop = {
+            "neighbourhood": nbh,
+            "postal_code": parsed.get("postal_code"),
+            "livable_area": parsed.get("livable_area"),
+            "number_of_bedrooms": parsed.get("number_of_bedrooms"),
+            "property_type": parsed.get("property_type"),
+            "property_type_HOUSE": 1 if parsed.get("property_type") == "HOUSE" else 0,
+            "building_condition": parsed.get("building_condition"),
+            "energy_label": parsed.get("energy_label"),
+            "year_built": parsed.get("year_built"),
+            "age": (datetime.now().year - parsed["year_built"]) if parsed.get("year_built") else None,
+            "price": parsed.get("price"),
+            "garden_surface": parsed.get("garden_surface"),
+            "terrace_surface": parsed.get("terrace_surface"),
+            "cadastral_income": parsed.get("cadastral_income"),
+            "has_garden": parsed.get("has_garden"),
+            "has_terrace": parsed.get("has_terrace"),
+            "has_swimming_pool": parsed.get("has_swimming_pool"),
+            "has_lift": parsed.get("has_lift"),
+            "has_double_glazing": parsed.get("has_double_glazing"),
+            "has_photovoltaic_panels": parsed.get("has_photovoltaic_panels"),
+            "has_heat_pump": parsed.get("has_heat_pump"),
+            "parking_indoor": parsed.get("parking_indoor"),
+            "parking_outdoor": parsed.get("parking_outdoor"),
+        }
+        try:
+            result["comparables"] = self.data_loader.find_comparables(prop)
+        except Exception:
+            result["comparables"] = None
+        try:
+            result["context"] = self.data_loader.get_feature_context(prop)
+        except Exception:
+            result["context"] = []
+        if features_df is not None:
+            result["shap"] = self._compute_shap(features_df)
+
+    def _impute_missing(self, row, asking_price, livable_area):
+        """Apply pipeline-equivalent imputation using saved Poisson GLMs."""
+        poisson_models = self.imputation_models.get("poisson_models", {})
+        median_year_built = self.imputation_models.get("median_year_built")
+
+        # 1. year_built / age: use median if missing
+        if row.get("year_built") is None and median_year_built is not None:
+            row["year_built"] = median_year_built
+            row["age"] = datetime.now().year - median_year_built
+
+        # Compute price_k and price_sq_k (pipeline uses K-EUR scale)
+        price_k = asking_price / 1000 if asking_price else None
+        price_sq_k = (price_k / livable_area) if (price_k and livable_area) else None
+
+        # Helper: build predictor dict and call a Poisson model
+        # Core predictors (price, livable_area, property_type_HOUSE) must be present;
+        # extra predictors (floor_number, facade_count, is_newly_built) default to 0
+        core_predictors = {"price", "price_sq", "livable_area", "property_type_HOUSE"}
+
+        def _poisson_predict(target_name):
+            entry = poisson_models.get(target_name)
+            if entry is None:
+                return None
+            model = entry["model"]
+            predictors = entry["predictors"]
+            pred_dict = {}
+            for col in predictors:
+                if col == "price":
+                    pred_dict[col] = price_k
+                elif col == "price_sq":
+                    pred_dict[col] = price_sq_k
+                elif col == "property_type_HOUSE":
+                    pred_dict[col] = row.get("property_type_HOUSE", 0)
+                else:
+                    val = row.get(col)
+                    # Extra predictors default to 0 if missing
+                    pred_dict[col] = val if val is not None else 0
+            # Core predictors must be present
+            if any(pred_dict.get(c) is None for c in core_predictors if c in predictors):
+                return None
+            pred_df = pd.DataFrame([pred_dict])
+            result = model.predict(pred_df)
+            return max(0, int(round(float(result.values[0]))))
+
+        # 2. Count fields: impute if 0 or None (pipeline treats 0 as missing)
+        # Sequential: bedrooms -> toilets -> bathrooms (chained)
+        for field in ["number_of_bedrooms", "number_of_toilets", "number_of_bathrooms"]:
+            val = row.get(field)
+            if val is None or val == 0:
+                imputed = _poisson_predict(field)
+                if imputed is not None:
+                    row[field] = imputed
+
+        # 3. Cadastral income: impute if 0 or None
+        ci = row.get("cadastral_income")
+        if ci is None or ci == 0:
+            imputed = _poisson_predict("cadastral_income")
+            if imputed is not None:
+                row["cadastral_income"] = imputed
+
+        return row
+
+    def _load_street_graph(self):
+        """Lazy-load the OSMnx street graph for spatial street_type lookup."""
+        if self._street_graph is not None:
+            return
+        if not self.street_graph_path:
+            return
+        import os
+        if not os.path.exists(self.street_graph_path):
+            print(f"Street graph not found at {self.street_graph_path}")
+            return
+        try:
+            import osmnx as ox
+            self._street_graph = ox.load_graphml(self.street_graph_path)
+            _, edges = ox.graph_to_gdfs(self._street_graph)
+            edges['highway'] = edges['highway'].apply(
+                lambda h: h[0] if isinstance(h, list) else h)
+            self._street_edges = edges
+            print(f"Street graph loaded ({len(edges)} edges)")
+        except Exception as e:
+            print(f"Could not load street graph: {e}")
+
+    def _lookup_street_type(self, lat, lon):
+        """Spatial street_type + distance lookup using OSMnx. Falls back to heuristic."""
+        self._load_street_graph()
+        if self._street_graph is None:
+            return self._get_street_type(""), 0
+
+        try:
+            import osmnx as ox
+            import numpy as np
+            edge_indices, distances = ox.nearest_edges(
+                self._street_graph, X=np.array([lon]), Y=np.array([lat]),
+                return_dist=True)
+            street_type = self._street_edges.loc[edge_indices[0], 'highway']
+
+            # Correct cycleways/footways like the pipeline does
+            undesirable = ['cycleway', 'footway', 'path', 'pedestrian',
+                           'track', 'steps', 'service', 'trunk']
+            if street_type in undesirable:
+                main_edges = self._street_edges[
+                    ~self._street_edges['highway'].isin(undesirable)]
+                if not main_edges.empty:
+                    nodes, _ = ox.graph_to_gdfs(self._street_graph)
+                    G_main = ox.graph_from_gdfs(nodes, main_edges)
+                    main_indices, main_dists = ox.nearest_edges(
+                        G_main, X=np.array([lon]), Y=np.array([lat]),
+                        return_dist=True)
+                    if main_dists[0] <= 20.0:
+                        street_type = main_edges.loc[main_indices[0], 'highway']
+                        distances = main_dists
+
+            return str(street_type), float(distances[0])
+        except Exception as e:
+            print(f"Street lookup failed: {e}")
+            return self._get_street_type(""), 0
+
+    def batch_lookup_street_types(self, lats, lons):
+        """Batch spatial street_type + distance lookup for multiple properties."""
+        self._load_street_graph()
+        n = len(lats)
+        if self._street_graph is None or n == 0:
+            return ["residential"] * n, [0.0] * n
+
+        try:
+            import osmnx as ox
+            import numpy as np
+            lats_arr = np.array(lats)
+            lons_arr = np.array(lons)
+
+            edge_indices, distances = ox.nearest_edges(
+                self._street_graph, X=lons_arr, Y=lats_arr,
+                return_dist=True)
+            street_types = self._street_edges.loc[edge_indices, 'highway'].values.tolist()
+
+            # Correct undesirable types
+            undesirable = {'cycleway', 'footway', 'path', 'pedestrian',
+                           'track', 'steps', 'service', 'trunk'}
+            needs_correction = [i for i, st in enumerate(street_types) if st in undesirable]
+
+            if needs_correction:
+                main_edges = self._street_edges[
+                    ~self._street_edges['highway'].isin(undesirable)]
+                if not main_edges.empty:
+                    nodes, _ = ox.graph_to_gdfs(self._street_graph)
+                    G_main = ox.graph_from_gdfs(nodes, main_edges)
+                    corr_lons = lons_arr[needs_correction]
+                    corr_lats = lats_arr[needs_correction]
+                    main_indices, main_dists = ox.nearest_edges(
+                        G_main, X=corr_lons, Y=corr_lats, return_dist=True)
+                    corrected_types = main_edges.loc[main_indices, 'highway'].values
+                    for j, orig_idx in enumerate(needs_correction):
+                        if main_dists[j] <= 20.0:
+                            street_types[orig_idx] = corrected_types[j]
+                            distances[orig_idx] = main_dists[j]
+
+            return [str(s) for s in street_types], [float(d) for d in distances]
+        except Exception as e:
+            print(f"Batch street lookup failed: {e}")
+            return ["residential"] * n, [0.0] * n
 
     @staticmethod
     def _get_street_type(address):
