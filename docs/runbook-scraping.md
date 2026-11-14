@@ -36,13 +36,32 @@ There are **two** virtualenvs. Using the wrong one is the most common mistake.
 1. **Scrape** — `scraper.scrape_houses(num_pages)` drives a real Chrome via
    `undetected_chromedriver`, saving each listing's HTML to
    `data/<property_id>/full_source_<DDMMYYYY>.html`.
-2. **Parse** — `parser.parse_data_folder_parallel()` walks **all** of `data/`
-   (not just today's files) and writes `outputs/property_data_raw.csv`.
+2. **Parse** — `parser.parse_data_folder_parallel()` extracts the
+   `window.classified` payload from each HTML file and writes
+   `outputs/property_data_raw.csv`.
 
-Note that stage 2 re-parses the entire 51 GB corpus every time, which is
-wasteful for an incremental scrape. If you only want today's new listings,
-scrape first and then use `src/parse_today_and_append.py` (see
-[Parsing only today's files](#parsing-only-todays-files)).
+### Incremental parsing (default when a manifest exists)
+
+Stage 2 keeps a manifest at `outputs/parse_manifest.json` listing every
+`(property_id, date_obtained)` pair already parsed. On subsequent runs it
+**skips files already in the manifest**, parses only the new ones, and merges
+them onto the existing CSV. Re-reading 51 GB of HTML to pick up a few hundred
+new files is the largest avoidable cost in the pipeline, so this is the
+default as soon as a manifest exists.
+
+```bash
+.venv/bin/python -u src/main.py 20                  # incremental (if manifest exists)
+.venv/bin/python -u src/main.py 0 --skip-scrape     # parse only, no scraping
+.venv/bin/python -u src/main.py 0 --full-reparse    # ignore manifest, re-parse everything
+.venv/bin/python -u src/main.py 0 --incremental     # force incremental
+```
+
+Parse failures are recorded per file in `outputs/parse_failures.csv`
+(`file`, `reason`) rather than being printed and forgotten.
+
+`src/parse_today_and_append.py` is the older date-tag-based path. It requires
+`TODAY_TAG` to be edited by hand each run (`src/parse_today_and_append.py:17`),
+so prefer the incremental mode above.
 
 ## Politeness / rate limiting
 
