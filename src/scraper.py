@@ -6,7 +6,11 @@ import subprocess
 from datetime import datetime
 
 from bs4 import BeautifulSoup
-import undetected_chromedriver as uc
+
+try:
+    import undetected_chromedriver as uc
+except Exception:  # pragma: no cover - optional dependency
+    uc = None
 
 # --- Constants ---
 BASE_URL = "https://www.immoweb.be/en/search/house-and-apartment/for-sale/gent/9000?countries=BE&isNewlyBuilt=false&page="
@@ -29,22 +33,89 @@ def get_chrome_major_version():
 
 def setup_driver():
     """
-    Initializes an undetected Chrome browser to bypass DataDome CAPTCHA.
+    Initializes a Chrome browser to bypass DataDome CAPTCHA.
     Runs in non-headless mode since headless is detected by DataDome.
+
+    Prefers undetected-chromedriver, but falls back to plain Selenium when UC
+    cannot drive the installed Chrome. UC 3.5.5 (the latest release) is broken
+    against Chrome 157: the session starts, then every navigation dies with
+    "no such window: target window already closed". Plain Selenium with a real
+    user-agent drives Chrome 157 fine and is not challenged by DataDome, so the
+    fallback is validated by actually loading a page before it is returned.
+
+    Force one backend with SCRAPER_DRIVER=uc or SCRAPER_DRIVER=selenium.
     """
+    chrome_version = get_chrome_major_version()
+    preference = os.environ.get("SCRAPER_DRIVER", "auto").strip().lower()
+
+    if preference not in ("selenium",) and uc is not None:
+        try:
+            driver = _build_uc_driver(chrome_version)
+            _verify_driver(driver)
+            print(f"Undetected Chrome browser initialized (version_main={chrome_version}).")
+            return driver
+        except Exception as e:
+            print(f"undetected-chromedriver unavailable ({type(e).__name__}: {e}); falling back to Selenium.")
+            _safe_quit("driver" in dir() and driver or None)
+
+    if preference == "uc":
+        raise RuntimeError("SCRAPER_DRIVER=uc requested but undetected-chromedriver is not usable")
+
+    driver = _build_selenium_driver()
+    _verify_driver(driver)
+    print(f"Selenium Chrome browser initialized (version_main={chrome_version}).")
+    return driver
+
+
+def _build_uc_driver(chrome_version):
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
-
-    # Match driver to installed Chrome major version to prevent mismatch on browser updates
-    chrome_version = get_chrome_major_version()
     if chrome_version:
-        driver = uc.Chrome(options=options, version_main=chrome_version)
-    else:
-        driver = uc.Chrome(options=options)
-    print(f"Undetected Chrome browser initialized (version_main={chrome_version}).")
-    return driver
+        return uc.Chrome(options=options, version_main=chrome_version)
+    return uc.Chrome(options=options)
+
+
+def _build_selenium_driver():
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    import tempfile
+
+    options = Options()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+    # Fresh profile per run so a locked/occupied default profile cannot interfere.
+    options.add_argument(f"--user-data-dir={tempfile.mkdtemp(prefix='immoscrape_')}")
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
+    )
+    # Keep the window visible (non-headless) so DataDome is not triggered.
+    return webdriver.Chrome(options=options)
+
+
+def _verify_driver(driver, timeout=60):
+    """Load a cheap page and confirm the browser can actually navigate."""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            driver.get("https://www.google.com")
+            if driver.page_source:
+                return True
+        except Exception as e:
+            if time.time() > deadline:
+                raise RuntimeError(f"browser could not load a page: {e}") from e
+            time.sleep(3)
+
+
+def _safe_quit(driver):
+    try:
+        if driver is not None:
+            driver.quit()
+    except Exception:
+        pass
 
 
 def parse_page(html):
