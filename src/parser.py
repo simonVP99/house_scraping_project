@@ -23,7 +23,7 @@ import os
 import re
 import sys
 import json
-import pandas as pd
+import polars as pl
 from datetime import datetime
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -154,6 +154,33 @@ def normalize_city(value):
     return collapsed
 
 
+def _surface_values(bedroom_list):
+    """Numeric surfaces from the ``property.bedrooms`` array, dropping junk."""
+    out = []
+    for bedroom in bedroom_list or []:
+        if not isinstance(bedroom, dict):
+            continue
+        value = bedroom.get('surface')
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            out.append(float(value))
+    return out
+
+
+def _sum_bedroom_surfaces(bedroom_list):
+    values = _surface_values(bedroom_list)
+    return sum(values) if values else None
+
+
+def _min_bedroom_surface(bedroom_list):
+    values = _surface_values(bedroom_list)
+    return min(values) if values else None
+
+
+def _max_bedroom_surface(bedroom_list):
+    values = _surface_values(bedroom_list)
+    return max(values) if values else None
+
+
 def normalize_street(value):
     """Collapse whitespace and strip a trailing house number that leaked in.
 
@@ -275,6 +302,12 @@ def extract_info(file_path):
     construction_permit_data = property_details.get('constructionPermit') or {}
     kitchen_data = property_details.get('kitchen') or {}
     living_room_data = property_details.get('livingRoom') or {}
+    certificates_property_data = property_details.get('propertyCertificates') or {}
+    specificities_data = property_details.get('specificities') or {}
+    attic_data = property_details.get('attic') or {}
+    basement_data = property_details.get('basement') or {}
+    bedroom_list = property_details.get('bedrooms') or []
+    investor_data = transaction_data.get('investor') or {}
 
     description = (
         property_details.get('description')
@@ -290,6 +323,10 @@ def extract_info(file_path):
 
         # ---- Pricing ----
         'price': _safe_get(price_data, 'mainValue', 'price'),
+        # Unpriced listings are real: price.type == 'group_sale' carries a range
+        # (mainValue null, min/maxRangeValue set), and 'annuity_monthly_amount'
+        # carries a monthly figure that must never be read as a sale price.
+        'price_type': price_data.get('type'),
         'price_min': price_data.get('minRangeValue'),
         'price_max': price_data.get('maxRangeValue'),
         'price_old_value': price_data.get('oldValue'),
@@ -319,6 +356,7 @@ def extract_info(file_path):
         'total_floors': building_data.get('floorCount'),
         'facade_count': building_data.get('facadeCount'),
         'street_facade_width': building_data.get('streetFacadeWidth'),
+        'annex_count': building_data.get('annexCount'),
 
         # ---- Dimensions ----
         'livable_area': _safe_get(property_details, 'netHabitableSurface', 'indoor_surface'),
@@ -333,6 +371,19 @@ def extract_info(file_path):
         'number_of_toilets': property_details.get('toiletCount'),
         'shower_room_count': property_details.get('showerRoomCount'),
         'fireplace_count': property_details.get('fireplaceCount'),
+
+        # ---- Interior surfaces (per-room breakdown) ----
+        # These are free whenever the agency filled the interior section, and
+        # they allow a real consistency check: living + kitchen + bedrooms should
+        # not exceed netHabitableSurface (observed to hold for 98.5% of listings).
+        'bedroom_surface_sum': _sum_bedroom_surfaces(bedroom_list),
+        'bedroom_surface_min': _min_bedroom_surface(bedroom_list),
+        'bedroom_surface_max': _max_bedroom_surface(bedroom_list),
+        'bedrooms_with_surface': sum(
+            1 for b in bedroom_list
+            if isinstance(b, dict) and b.get('surface') is not None),
+        'attic_surface': attic_data.get('surface'),
+        'basement_surface': basement_data.get('surface'),
 
         # ---- Amenities (tri-state: True / False / None=unknown) ----
         'has_living_room': tri_state_bool(property_details.get('hasLivingRoom')),
@@ -384,6 +435,43 @@ def extract_info(file_path):
         'land_width': land_data.get('landWidth'),
         'land_use_designation': land_data.get('latestUseDesignation'),
         'land_sewer_connection': tri_state_bool(land_data.get('sewerConnection')),
+        'land_sewer_connection_raw': clean_text(land_data.get('sewerConnection'), 40),
+        'land_has_gas_water_electricity': tri_state_bool(
+            land_data.get('hasGasWaterElectricityConnection')),
+        'land_has_plot_to_rear': tri_state_bool(land_data.get('hasPlotToRear')),
+
+        # ---- Property certificates (EPC-adjacent, agency-declared) ----
+        'cert_has_electrical_installation': tri_state_bool(
+            certificates_property_data.get(
+                'hasElectricalInstallationComplianceCertificate')),
+        'cert_has_asbestos': tri_state_bool(
+            certificates_property_data.get('hasAsbestosCertificate')),
+        'cert_built_plan_status': clean_text(
+            certificates_property_data.get('builtPlanStatus'), 40),
+        'cert_oil_tank_status': clean_text(
+            certificates_property_data.get('oilTankCertificateStatus'), 40),
+        'cert_global_insulation_level': certificates_property_data.get(
+            'globalInsulationLevel'),
+        'cert_primary_energy_consumption_level': certificates_property_data.get(
+            'primaryEnergyConsumptionLevel'),
+
+        # ---- Interior facilities (office / workspace) ----
+        'has_office': tri_state_bool(specificities_data.get('hasOffice')),
+        'office_surface': _safe_get(specificities_data, 'office', 'surface'),
+        'has_workspace': tri_state_bool(specificities_data.get('hasWorkspace')),
+        'workspace_surface': _safe_get(specificities_data, 'workspace', 'surface'),
+
+        # ---- Availability ----
+        'availability_period_type': clean_text(
+            transaction_data.get('availabilityPeriodType'), 40),
+        'availability_date': clean_text(transaction_data.get('availabilityDate'), 20),
+        'is_subject_to_vat': tri_state_bool(sale_data.get('isSubjectToVat')),
+
+        # ---- Investment (rental yield, rarely declared) ----
+        'is_investment_property': tri_state_bool(
+            investor_data.get('isInvestmentProperty')),
+        'expected_monthly_rental_income': investor_data.get(
+            'expectedMonthlyRentalIncome'),
 
         # ---- Transaction ----
         'transaction_type': transaction_data.get('type'),
@@ -410,9 +498,30 @@ def extract_info(file_path):
         'publication_date': publication_data.get('creationDate'),
         'last_modification_date': publication_data.get('lastModificationDate'),
         'publication_expiration_date': publication_data.get('expirationDate'),
+        # Paid promotion tier: XL/L/M. Premium exposure is a legitimate price
+        # signal, not a leak (it is known at listing time).
+        'visualisation_option': clean_text(
+            publication_data.get('visualisationOption'), 10),
         'external_reference': clean_text(data.get('externalReference'), 120),
         'immo_office_name': clean_text(
             (customers_data[0] or {}).get('name'), 120) if customers_data else None,
+
+        # ---- Listing state (over a listing's life) ----
+        # displayFlags.main is the canonical state machine: None / 'new' /
+        # 'under_option'.  secondary carries new_construction, new_price,
+        # life_annuity, notary_sale, biddit_sale, percent_sold.
+        'display_flag_main': clean_text(
+            ((data.get('displayFlags') or {}).get('main')), 30),
+        'display_flags_secondary': '|'.join(
+            sorted(str(x) for x in
+                   ((data.get('displayFlags') or {}).get('secondary') or []))) or None,
+
+        # ---- Form completeness ----
+        # Which sections the agency filled in.  Doubles as the explanation for
+        # *why* sparse fields are sparse, so missingness becomes a signal.
+        'sections_filled_count': sum(
+            1 for value in ((data.get('hasSectionsArray') or {}).values())
+            if value is True),
 
         # ---- Flags ----
         'is_biddit_sale': tri_state_bool(flags_data.get('isAnInteractiveSale')),
@@ -444,14 +553,55 @@ def collect_html_files(root_directory):
     """Return a sorted list of HTML file paths under ``root_directory``.
 
     Sorted so that ``stop_after`` selects a stable subset across runs.
+
+    Implemented with ``os.scandir`` rather than ``os.walk``: DirEntry already
+    carries ``is_dir``/``is_file`` from the readdir call, so the ~30k directory
+    stat calls that ``os.walk`` would issue are avoided.
     """
     paths = []
-    for dirpath, _dirnames, filenames in os.walk(root_directory):
-        for filename in filenames:
-            if filename.endswith('.html'):
-                paths.append(os.path.join(dirpath, filename))
+    stack = [root_directory]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+                elif entry.name.endswith('.html') and entry.is_file(follow_symlinks=False):
+                    paths.append(entry.path)
+            except OSError:
+                continue
     paths.sort()
     return paths
+
+
+def _effective_workers(requested=None):
+    """Worker count tuned for this workload.
+
+    Parsing a 379 KB file costs 0.31 ms with 4 workers and 0.99 ms with 16 --
+    it is memory-bandwidth bound, not CPU bound, so oversubscribing the 18-core
+    machine actively hurts.  Measured on an M5 Pro.
+    """
+    if requested is not None:
+        return max(int(requested), 1)
+    return min(4, os.cpu_count() or 1)
+
+
+def rows_to_frame(rows):
+    """Assemble extracted rows into a Polars DataFrame with stable schema.
+
+    ``infer_schema_length=None`` scans every value: the default samples only the
+    first 100 rows, which silently mistypes sparse columns (a column null for
+    the first 100 rows gets String instead of Float64) and then either errors or
+    coerces lossily.  ``strict=False`` lets genuinely mixed columns fall back to
+    String instead of aborting the whole corpus parse.
+    """
+    if not rows:
+        return pl.DataFrame()
+    return pl.DataFrame(rows, infer_schema_length=None, strict=False)
 
 
 def _atomic_write_json(path, payload):
@@ -494,10 +644,10 @@ def parse_data_folder_parallel(root_directory, output_file, stop_after=None,
         failures_file: Optional CSV path for a per-file failure manifest.
         manifest_file: Optional JSON path tracking already-parsed files.
         incremental: When True, skip files recorded in ``manifest_file``.
-        workers: Optional worker-process count.
+        workers: Optional worker-process count (default 4; see _effective_workers).
 
     Returns:
-        pd.DataFrame of extracted rows.
+        A Polars DataFrame of extracted rows.
     """
     all_files = collect_html_files(root_directory)
     print(f"Found {len(all_files)} HTML files.")
@@ -516,17 +666,17 @@ def parse_data_folder_parallel(root_directory, output_file, stop_after=None,
         print("No new HTML files to process.")
         if incremental and manifest_file and parsed_keys:
             print("Nothing new; keeping existing output unchanged.")
-            return pd.DataFrame()
+            return pl.DataFrame()
         try:
-            return pd.read_csv(output_file)
+            return pl.read_csv(output_file)
         except FileNotFoundError:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
     print(f"Parsing {len(all_files)} HTML files in parallel...")
     rows = []
     failures = []
 
-    with ProcessPoolExecutor(max_workers=workers) as executor:
+    with ProcessPoolExecutor(max_workers=_effective_workers(workers)) as executor:
         futures = {executor.submit(extract_info, path): path for path in all_files}
         for future in tqdm(as_completed(futures), total=len(futures),
                            desc="Parsing HTML files",
@@ -541,12 +691,25 @@ def parse_data_folder_parallel(root_directory, output_file, stop_after=None,
             except Exception as exc:  # noqa: BLE001 - report, don't abort the run
                 failures.append({'file': path, 'reason': f'{type(exc).__name__}: {exc}'})
 
+    # A broken pool fails EVERY future with the same exception, so without this
+    # check the caller gets a plausible-looking "0 rows parsed" and a manifest
+    # of thousands of identical errors instead of one clear diagnosis.
+    broken_pool = sum(1 for f in failures if 'BrokenProcessPool' in f['reason'])
+    if broken_pool and broken_pool >= 0.9 * max(len(all_files), 1):
+        raise RuntimeError(
+            f"{broken_pool}/{len(all_files)} files failed with BrokenProcessPool "
+            f"and no rows were produced. This is usually an unguarded "
+            f"multiprocessing entry point: the code that calls "
+            f"parse_data_folder_parallel must be behind "
+            f"`if __name__ == '__main__':` on this platform (spawn-based "
+            f"multiprocessing).")
+
     print(f"Parsed {len(rows)} files, {len(failures)} failures "
           f"({len(failures) / max(len(all_files), 1) * 100:.3f}%).")
 
     if failures:
         if failures_file:
-            pd.DataFrame(failures).to_csv(failures_file, index=False)
+            pl.DataFrame(failures).write_csv(failures_file)
             print(f"  Failure manifest written to {failures_file}")
         else:
             for item in failures[:10]:
@@ -560,7 +723,7 @@ def parse_data_folder_parallel(root_directory, output_file, stop_after=None,
         save_manifest(manifest_file, new_keys)
         print(f"  Manifest now tracks {len(new_keys)} parsed files.")
 
-    return pd.DataFrame(rows)
+    return rows_to_frame(rows)
 
 
 def _manifest_key_for(file_path):

@@ -1,7 +1,7 @@
 import argparse
 import time
 import os
-import pandas as pd
+import polars as pl
 from scraper import scrape_houses
 from parser import parse_data_folder_parallel
 
@@ -19,26 +19,47 @@ def merge_with_previous(new_df, output_file):
     rows have to be carried forward.  Keyed on (property_id, date_obtained) so
     re-parsing an already-known file replaces rather than duplicates it.
     """
-    if new_df.empty:
+    if new_df is None or new_df.height == 0:
         print("No new rows parsed; existing dataset left unchanged.")
         return None
     if not os.path.exists(output_file):
         return new_df
-    previous = pd.read_csv(output_file, low_memory=False)
+
+    # Read everything as String: this CSV mixes types across parse generations
+    # (an int-like postal code in one run, a string in another), and Polars is
+    # strict about that where pandas silently coerced.
+    previous = pl.read_csv(output_file, infer_schema_length=0)
     if 'property_id' not in previous.columns or 'date_obtained' not in previous.columns:
         print("Existing output lacks identity columns; writing new rows only.")
         return new_df
 
-    for frame in (previous, new_df):
-        frame['property_id'] = frame['property_id'].astype(str)
-        frame['date_obtained'] = frame['date_obtained'].astype(str)
+    new = new_df.with_columns(
+        pl.col('property_id').cast(pl.Utf8),
+        pl.col('date_obtained').cast(pl.Utf8),
+    )
+    # UNION of the two column sets, not the intersection: the old CSV predates
+    # newly extracted fields, and aligning to it would silently discard them on
+    # every incremental run.
+    all_columns = list(previous.columns) + [c for c in new.columns
+                                            if c not in previous.columns]
+    missing_in_new = [c for c in previous.columns if c not in new.columns]
+    if missing_in_new:
+        new = new.with_columns(
+            [pl.lit(None, dtype=pl.Utf8).alias(c) for c in missing_in_new])
+    missing_in_old = [c for c in new.columns if c not in previous.columns]
+    if missing_in_old:
+        previous = previous.with_columns(
+            [pl.lit(None, dtype=pl.Utf8).alias(c) for c in missing_in_old])
+    previous = previous.select(all_columns)
+    new = new.select(all_columns)
 
-    combined = pd.concat([previous, new_df], ignore_index=True)
-    before = len(combined)
-    combined = combined.drop_duplicates(subset=['property_id', 'date_obtained'], keep='last')
-    combined = combined.sort_values(['date_obtained', 'property_id']).reset_index(drop=True)
-    print(f"Merged: {len(previous)} previous + {len(new_df)} new "
-          f"-> {len(combined)} rows ({before - len(combined)} duplicates replaced)")
+    combined = pl.concat([previous, new], how='vertical_relaxed')
+    before = combined.height
+    combined = (combined
+                .unique(subset=['property_id', 'date_obtained'], keep='last')
+                .sort(['date_obtained', 'property_id']))
+    print(f"Merged: {previous.height} previous + {new.height} new "
+          f"-> {combined.height} rows ({before - combined.height} duplicates replaced)")
     return combined
 
 
@@ -85,8 +106,8 @@ def main():
         df = merged
 
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    df.to_csv(OUTPUT_FILE, index=False)
-    print(f"Data extraction and saving completed: {len(df)} rows -> {OUTPUT_FILE}")
+    df.write_csv(OUTPUT_FILE)
+    print(f"Data extraction and saving completed: {df.height} rows -> {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":
