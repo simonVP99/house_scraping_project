@@ -8,7 +8,22 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import seaborn as sns
+
+try:  # seaborn is only used for plot colour palettes
+    import seaborn as sns
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    sns = None
+
+
+def _palette(name, n):
+    """Colour palette that works with or without seaborn installed."""
+    if sns is not None:
+        return sns.color_palette(name, n)
+    try:
+        return plt.get_cmap(name).resampled(max(n, 1))(range(max(n, 1)))
+    except ValueError:
+        cmap = plt.get_cmap('viridis')
+        return cmap([i / max(n - 1, 1) for i in range(max(n, 1))])
 import os
 import warnings
 import urllib.request
@@ -128,15 +143,41 @@ def prepare_data(filepath):
 # TRAINING
 # ============================================================================
 
-def train_autogluon(df, target='price', time_limit=600, preset='best_quality'):
-    """Train AutoGluon TabularPredictor."""
+def train_autogluon(df, target='price', time_limit=600, preset='best_quality',
+                    holdout_fold=None):
+    """Train AutoGluon TabularPredictor.
+
+    Honours a precomputed ``fold`` column when present.  The previous
+    implementation called ``train_test_split(test_size=0.2, random_state=42)``
+    with no grouping, which put the same physical property (same address and
+    area) on both sides for 70% of test rows and inflated reported accuracy by
+    roughly 0.07 R^2.  When ``fold`` exists, one whole fold is held out instead,
+    and because folds are built from the property group key a property cannot
+    appear on both sides.
+    """
     print("\n" + "=" * 70)
     print(f"AUTOGLUON TRAINING (preset={preset}, time_limit={time_limit}s)")
     print("=" * 70)
 
-    # Train/test split (80/20, stratified by property type for balance)
-    from sklearn.model_selection import train_test_split
-    train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
+    if 'fold' in df.columns:
+        folds = sorted(df['fold'].unique())
+        holdout = holdout_fold if holdout_fold in folds else folds[-1]
+        train_df = df[df['fold'] != holdout].drop(columns=['fold'])
+        test_df = df[df['fold'] == holdout].drop(columns=['fold'])
+        print(f"Holding out fold {holdout} ({len(test_df):,} rows); "
+              f"train {len(train_df):,} rows.")
+        if 'property_key' in train_df.columns and 'property_key' in test_df.columns:
+            overlap = set(train_df['property_key']) & set(test_df['property_key'])
+            print(f"  property overlap across the split: {len(overlap)} "
+                  f"({'OK' if not overlap else 'LEAKAGE'})")
+    else:
+        # Refuse to silently reproduce the leaky default.
+        raise ValueError(
+            "No 'fold' column found. Build the dataset with "
+            "`python src/build_dataset.py` so folds are grouped by property; "
+            "a random row-wise split leaks duplicate properties across the "
+            "train/test boundary.")
+
     print(f"Train: {len(train_df):,} rows, Test: {len(test_df):,} rows")
 
     # Save test set for later evaluation
@@ -287,7 +328,7 @@ def plot_results(predictor, test_eval, importance, target='price'):
     test_eval['price_bracket'] = pd.cut(y_true, bins=[0, 200, 350, 500, 750, 2000],
                                         labels=['<200K', '200-350K', '350-500K', '500-750K', '>750K'])
     bracket_errors = test_eval.groupby('price_bracket', observed=True)['pct_error'].median()
-    colors = sns.color_palette('RdYlGn_r', len(bracket_errors))
+    colors = _palette('RdYlGn_r', len(bracket_errors))
     ax.bar(range(len(bracket_errors)), bracket_errors.values, color=colors)
     ax.set_xticks(range(len(bracket_errors)))
     ax.set_xticklabels(bracket_errors.index)
@@ -298,7 +339,7 @@ def plot_results(predictor, test_eval, importance, target='price'):
     ax = axes[1, 1]
     if importance is not None:
         top20 = importance.head(20).sort_values('importance')
-        colors = sns.color_palette('viridis', len(top20))
+        colors = _palette('viridis', len(top20))
         ax.barh(range(len(top20)), top20['importance'].values, color=colors)
         ax.set_yticks(range(len(top20)))
         ax.set_yticklabels(top20.index, fontsize=9)
@@ -318,7 +359,7 @@ def plot_results(predictor, test_eval, importance, target='price'):
         lb_sorted = lb.sort_values('score_test')
         # AutoGluon reports negative RMSE as score for regression
         lb_sorted['rmse'] = -lb_sorted['score_test']
-        ax.barh(range(len(lb_sorted)), lb_sorted['rmse'], color=sns.color_palette('viridis', len(lb_sorted)))
+        ax.barh(range(len(lb_sorted)), lb_sorted['rmse'], color=_palette('viridis', len(lb_sorted)))
         ax.set_yticks(range(len(lb_sorted)))
         ax.set_yticklabels(lb_sorted['model'], fontsize=9)
         ax.set_xlabel('RMSE (K€)')
