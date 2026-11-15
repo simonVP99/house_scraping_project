@@ -85,3 +85,46 @@ def test_store_is_gzipped_on_disk(tmp_path):
     path = store_path(str(tmp_path), '123456')
     with gzip.open(path, 'rt', encoding='utf-8') as fh:
         assert json.loads(fh.readline())['date'] == '01012025'
+
+
+def test_store_parse_matches_html_parse(tmp_path):
+    """A row rebuilt from the store must equal the row built from the page."""
+    from parser import build_row, extract_classified_json, parse_file_identity
+
+    files = sorted(glob.glob(os.path.join(ROOT, 'data', '*', 'full_source_*.html')))[:25]
+    if not files:
+        pytest.skip('no scraped HTML available')
+
+    store = SnapshotStore(str(tmp_path))
+    for path in files:
+        property_id, date_tag = parse_file_identity(path)
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            html = fh.read()
+        store.save(property_id, date_tag, html)
+        from_html = build_row(extract_classified_json(html), property_id, date_tag)
+        # The 25 sampled files can include several snapshots of one property,
+        # so select the record by date rather than assuming it is first.
+        record = next(r for r in read_store(store_path(str(tmp_path), property_id))
+                      if r['date'] == date_tag)
+        from_store = build_row(record['js'], property_id, date_tag)
+        assert from_store == from_html
+
+
+def test_store_parse_round_trips_every_field(tmp_path):
+    from parser import parse_snapshot_store
+
+    files = sorted(glob.glob(os.path.join(ROOT, 'data', '*', 'full_source_*.html')))[:40]
+    if not files:
+        pytest.skip('no scraped HTML available')
+    store = SnapshotStore(str(tmp_path))
+    for path in files:
+        from parser import parse_file_identity
+        property_id, date_tag = parse_file_identity(path)
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            store.save(property_id, date_tag, fh.read())
+
+    frame, errors = parse_snapshot_store(str(tmp_path), progress_every=0,
+                                         log=lambda *a: None)
+    assert errors == []
+    assert frame.height == 40
+    assert 'property_id' in frame.columns

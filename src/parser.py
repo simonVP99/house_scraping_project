@@ -375,6 +375,17 @@ def extract_info(file_path):
     if data is None:
         return None
 
+    return build_row(data, property_id, date_str)
+
+
+def build_row(data, property_id, date_str):
+    """Turn a ``window.classified`` payload into one flat row.
+
+    Separated from :func:`extract_info` so a row can be rebuilt from a stored
+    payload without a page on disk -- see ``snapshot_store``, which keeps the
+    payload at ~0.3% of the HTML size. ``extract_info`` is still the HTML entry
+    point and every existing caller is unaffected.
+    """
     # --- Navigate to major JSON sections ---
     property_details = data.get('property') or {}
     price_data = data.get('price') or {}
@@ -708,6 +719,51 @@ def collect_html_files(root_directory):
                 continue
     paths.sort()
     return paths
+
+
+def parse_snapshot_store(data_dir, workers=None, progress_every=5000, log=print):
+    """Build the full dataset from ``data/.snapshots`` instead of the HTML tree.
+
+    Equivalent output to :func:`parse_data_folder_parallel`, but reads ~0.3% as
+    many bytes: the store holds only the ``window.classified`` payload, already
+    decompressed in one stream per property. Each row is rebuilt through the same
+    :func:`build_row`, so field values are identical to an HTML parse.
+
+    Returns a polars DataFrame with the same columns as the HTML path.
+    """
+    import gzip
+    import json
+
+    store_dir = os.path.join(data_dir, '.snapshots')
+    if not os.path.isdir(store_dir):
+        raise FileNotFoundError(
+            f'no snapshot store at {store_dir}; build one with '
+            f'python src/snapshot_store.py --data-dir {data_dir}')
+
+    names = sorted(n for n in os.listdir(store_dir) if n.endswith('.jsonl.gz'))
+    rows = []
+    errors = []
+    for index, name in enumerate(names, 1):
+        property_id = name[:-len('.jsonl.gz')]
+        try:
+            with gzip.open(os.path.join(store_dir, name), 'rt', encoding='utf-8') as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = json.loads(line)
+                    payload = record.get('js')
+                    if not isinstance(payload, dict):
+                        errors.append((property_id, 'payload not an object'))
+                        continue
+                    rows.append(build_row(payload, property_id, record.get('date')))
+        except Exception as error:  # noqa: BLE001 - report, never abort the run
+            errors.append((property_id, f'{type(error).__name__}: {error}'))
+        if progress_every and index % progress_every == 0:
+            log(f'  {index:,}/{len(names):,} properties, {len(rows):,} rows')
+
+    log(f'Built {len(rows):,} rows from snapshot store, {len(errors)} errors')
+    return rows_to_frame(rows), errors
 
 
 def _effective_workers(requested=None):

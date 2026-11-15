@@ -236,3 +236,40 @@ print(len(df), 'rows;', 'newest date_obtained:', df['date_obtained'].max())
 | `No property links found` | page layout changed, or not actually a results page | inspect saved `debug_no_links_found.html` |
 | `captcha-delivery` in page | DataDome challenge | handled; backs off automatically |
 | Nothing saved but no error | listings already existed, or all pages blocked | check `debug_*` files |
+
+## Snapshot store (compressed corpus)
+
+After scraping, the corpus is 52 GB of HTML, but only ~5% of each file is the
+`window.classified` payload the parser reads. One gzipped stream per property
+keeps the payload at **0.33%** of the HTML size:
+
+```bash
+# build / refresh the store (non-destructive, keeps the HTML)
+.venv-api/bin/python src/snapshot_store.py --data-dir data
+
+# measure how much is re-observation without writing anything
+.venv-api/bin/python src/snapshot_store.py --data-dir data --report-only
+
+# reclaim the space: archive to outputs/data_html_archive.tar, verify, delete
+.venv-api/bin/python src/snapshot_store.py --data-dir data --remove-html
+```
+
+Measured on the full corpus: 30,313 properties, 143,806 snapshots,
+55.19 GB HTML -> 183 MB store in **138 s**, 53 snapshots without a payload
+(the same 53 the parser reports).
+
+`--remove-html` is destructive but not blind: it writes a tar, reads the tar
+back, and refuses to delete unless the entry count matches the file count.
+Budget ~11.5 GB for that tar (gzip), so peak usage is roughly
+52 GB + 11.5 GB before the HTML is removed.
+
+Parse from the store instead of the HTML tree (verified bit-identical over all
+145 columns on 143,806 rows):
+
+```python
+from parser import parse_snapshot_store
+frame, errors = parse_snapshot_store('data')
+```
+
+`collect_html_files` skips dot-directories, so `data/.snapshots` is never fed
+to the HTML parser.
