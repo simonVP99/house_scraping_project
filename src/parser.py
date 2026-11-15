@@ -336,6 +336,28 @@ def pick_description(property_details):
     return max(non_empty, key=len) if non_empty else None
 
 
+def pick_description_language(property_details, chosen):
+    """Which language field ``chosen`` came from, for embedding provenance.
+
+    Reciprocal to pick_description: the merged ``description`` column keeps one
+    language only, and an embedder that is told the language can avoid
+    code-switching artefacts when listings mix NL and FR.
+    """
+    if not isinstance(chosen, str) or not chosen.strip():
+        return None
+    if not isinstance(property_details, dict):
+        return None
+    alternatives = property_details.get('alternativeDescriptions') or {}
+    if not isinstance(alternatives, dict):
+        alternatives = {}
+    if chosen == property_details.get('description'):
+        return 'main'
+    for language in ('nl', 'en', 'fr'):
+        if chosen == alternatives.get(language):
+            return language
+    return 'main'
+
+
 def extract_info(file_path):
     """Extract structured property data from one Immoweb HTML file.
 
@@ -370,6 +392,10 @@ def extract_info(file_path):
     energy_data = property_details.get('energy') or {}
     land_data = property_details.get('land') or {}
     construction_permit_data = property_details.get('constructionPermit') or {}
+    sections_data = data.get('hasSectionsArray') or {}
+    alternative_text = property_details.get('alternativeDescriptions') or {}
+    if not isinstance(alternative_text, dict):
+        alternative_text = {}
     kitchen_data = property_details.get('kitchen') or {}
     living_room_data = property_details.get('livingRoom') or {}
     certificates_property_data = property_details.get('propertyCertificates') or {}
@@ -380,6 +406,7 @@ def extract_info(file_path):
     investor_data = transaction_data.get('investor') or {}
 
     description = pick_description(property_details)
+    description_language = pick_description_language(property_details, description)
 
     row = {
         # ---- Property identification ----
@@ -585,8 +612,45 @@ def extract_info(file_path):
         # Which sections the agency filled in.  Doubles as the explanation for
         # *why* sparse fields are sparse, so missingness becomes a signal.
         'sections_filled_count': sum(
-            1 for value in ((data.get('hasSectionsArray') or {}).values())
-            if value is True),
+            1 for value in sections_data.values() if value is True),
+        # The count alone conflates very different listings: 6 sections of
+        # interior data is not the same as 6 sections of financial data.  Measured
+        # over 400 listings, the per-section rates are far from uniform
+        # (general 99.8%, interior 98.2%, exterior 84.8%, facilities 65.8%,
+        # public sale 0.8%), so the individual flags carry information the sum
+        # throws away.  Stable across snapshots for 98.7% of properties, i.e. a
+        # static attribute of the listing rather than scrape-timing noise.
+        'section_general': tri_state_bool(sections_data.get('hasGeneralSection')),
+        'section_interior': tri_state_bool(sections_data.get('hasInteriorSection')),
+        'section_exterior': tri_state_bool(sections_data.get('hasExteriorSection')),
+        'section_facilities': tri_state_bool(sections_data.get('hasFacilitiesSection')),
+        'section_energy': tri_state_bool(sections_data.get('hasEnergySection')),
+        'section_planning': tri_state_bool(sections_data.get('hasPlanningSection')),
+        'section_financial': tri_state_bool(sections_data.get('hasFinancialSection')),
+        'section_public_sale': tri_state_bool(sections_data.get('hasPublicSaleSection')),
+
+        # ---- New-build / project context -------------------------------
+        # constructionPermit carries detail no other field exposes.  Fill rates
+        # over 400 listings: hasPossiblePriorityPurchaseRight 40.5%,
+        # constructionType 25.8%, hasPlotDivisionAuthorization 18.2%,
+        # totalBuildableGroundFloorSurface 7.2%.
+        'construction_type': _safe_get(construction_permit_data, 'constructionType'),
+        'has_plot_division_authorization': tri_state_bool(
+            construction_permit_data.get('hasPlotDivisionAuthorization')),
+        'has_priority_purchase_right': tri_state_bool(
+            construction_permit_data.get('hasPossiblePriorityPurchaseRight')),
+        'buildable_ground_floor_surface': _nested_number(
+            construction_permit_data, 'totalBuildableGroundFloorSurface', 'surface'),
+
+        # ---- Alternate-language descriptions -----------------------------
+        # The merged `description` above picks one language.  Embeds and text
+        # mining see whichever won, so keep the originals to (a) detect how much
+        # text the chosen branch dropped and (b) allow a language-aware embed.
+        # NL is present on 100% of listings and FR on 76%.
+        'description_nl': clean_text(alternative_text.get('nl')),
+        'description_fr': clean_text(alternative_text.get('fr')),
+        'description_en': clean_text(alternative_text.get('en')),
+        'description_language': description_language,
 
         # ---- Flags ----
         'is_biddit_sale': tri_state_bool(flags_data.get('isAnInteractiveSale')),
@@ -634,7 +698,10 @@ def collect_html_files(root_directory):
         for entry in entries:
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    stack.append(entry.path)
+                    # Skip dot-directories: data/.snapshots holds the compressed
+                    # snapshot stores, which are not HTML input.
+                    if not entry.name.startswith('.'):
+                        stack.append(entry.path)
                 elif entry.name.endswith('.html') and entry.is_file(follow_symlinks=False):
                     paths.append(entry.path)
             except OSError:

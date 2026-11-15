@@ -7,6 +7,8 @@ from datetime import datetime
 
 from bs4 import BeautifulSoup
 
+from snapshot_store import SnapshotStore
+
 try:
     import undetected_chromedriver as uc
 except Exception:  # pragma: no cover - optional dependency
@@ -15,6 +17,7 @@ except Exception:  # pragma: no cover - optional dependency
 # --- Constants ---
 BASE_URL = "https://www.immoweb.be/en/search/house-and-apartment/for-sale/gent/9000?countries=BE&isNewlyBuilt=false&page="
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SNAPSHOT_STORE = SnapshotStore(os.path.join(BASE_DIR, 'data'))
 
 
 def get_chrome_major_version():
@@ -135,7 +138,13 @@ def parse_page(html):
 
 
 def save_house_data(driver, house_url):
-    """Fetches and saves the HTML for a single property page."""
+    """Fetches and saves the HTML for a single property page.
+
+    The page is written as HTML and appended to the property's compressed
+    snapshot store (see snapshot_store). The store keeps the same information at
+    ~0.3% of the size, so it is the durable copy; the HTML stays because the
+    parser and every existing consumer still read it.
+    """
     today = datetime.today().strftime('%d%m%Y')
     try:
         print(f"  -> Navigating to property: {house_url}")
@@ -151,12 +160,27 @@ def save_house_data(driver, house_url):
             return False
 
         property_id = house_url.split('/')[-1]
+        # house_url comes from scraped page markup, so treat the id as untrusted:
+        # a value containing a path separator would otherwise let a scrape write
+        # outside data/.
+        if not property_id.isdigit():
+            print(f"  -> WARNING: unexpected property id {property_id!r}, skipping.")
+            return False
+
         directory = os.path.join(BASE_DIR, 'data', property_id)
         os.makedirs(directory, exist_ok=True)
 
         file_path = os.path.join(directory, f"full_source_{today}.html")
         with open(file_path, "w", encoding="utf-8") as file:
             file.write(html_content)
+
+        try:
+            status = _SNAPSHOT_STORE.save(property_id, today, html_content)
+            if status == 'no_payload':
+                print(f"  -> WARNING: no window.classified payload for {property_id}")
+        except Exception as store_error:
+            # Storage of the compressed copy must never lose the scrape itself.
+            print(f"  -> WARNING: snapshot store failed for {property_id}: {store_error}")
 
         print(f"  -> Saved source for property {property_id}")
         return True
