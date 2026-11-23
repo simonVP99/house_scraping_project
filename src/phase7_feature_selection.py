@@ -216,30 +216,60 @@ def stage_perm():
     del models; gc.collect(); torch.mps.empty_cache()
 
 
-def stage_fm():
+def _run_fm_worker(kind: str, label: str, cols_json: str, tmode: str):
     import torch
-    from tabicl import TabICLRegressor
-    from tabpfn import TabPFNRegressor
-    from tabpfn.constants import ModelVersion
     from phase3_features import compute_metrics
+    cols = json.loads(cols_json)
+    cache, f0, tm = _load_2splits()
+    y = cache['y_price']; a = cache['y_area']; nm = cache['normal_mask']
+    ts = time.perf_counter()
+    out_m = {}
+    for tag, sp in (('f0', f0), ('tm', tm)):
+        if kind == 'tabicl':
+            from tabicl import TabICLRegressor
+            Xtr, Xva = _prep_fm(sp['tr_df'], sp['va_df'], cols, max_cat=30, numeric_cats=False)
+            yt = _target_fwd(y[sp['tr_idx']], a[sp['tr_idx']], sp['tr_deflator'], tmode).astype(np.float32)
+            reg = TabICLRegressor(device='mps', n_estimators=8, batch_size=1, use_amp=True, random_state=42)
+            reg.fit(Xtr, yt)
+            p_raw = np.asarray(reg.predict(Xva, output_type='median'), dtype=np.float64)
+            del reg
+        else:
+            from tabpfn import TabPFNRegressor
+            from tabpfn.constants import ModelVersion
+            Xtr, Xva = _prep_fm(sp['tr_df'], sp['va_df'], cols, max_cat=25, numeric_cats=True)
+            yt = _target_fwd(y[sp['tr_idx']], a[sp['tr_idx']], sp['tr_deflator'], tmode).astype(np.float32)
+            m_pfn = TabPFNRegressor.create_default_for_version(
+                ModelVersion.V2, device='mps', n_estimators=8,
+                ignore_pretraining_limits=True, inference_config={'SUBSAMPLE_SAMPLES': 7500}, random_state=42,
+            )
+            m_pfn.fit(Xtr, yt)
+            p_raw = np.asarray(m_pfn.predict(Xva), dtype=np.float64)
+            del m_pfn
+        gc.collect(); torch.mps.empty_cache()
+        p_eur = _target_inv(p_raw, a[sp['va_idx']], sp['va_deflator'], tmode)
+        out_m[tag] = compute_metrics(y[sp['va_idx']][nm[sp['va_idx']]], p_eur[nm[sp['va_idx']]])
+    dt = time.perf_counter() - ts
+    tag_s = 'TabICLv2' if kind == 'tabicl' else 'TabPFN  '
+    print(f"  [{tag_s}] {label:28s} ({len(cols):3d}c, {dt:5.1f}s) | f0={out_m['f0']['mdape']:5.2f}% (€{out_m['f0']['mae']:6,.0f}) | tm={out_m['tm']['mdape']:5.2f}% (€{out_m['tm']['mae']:6,.0f} bias {out_m['tm']['bias_pct']:+5.2f}%)", flush=True)
+    sw = _load_sweep()
+    fm_res = sw.get('fm_sweep', {})
+    fm_res[f'{kind}__{label}'] = {'cols': cols, 'n_cols': len(cols), 'f0': out_m['f0'], 'tm': out_m['tm']}
+    sw['fm_sweep'] = fm_res
+    _save_sweep(sw)
 
+
+def stage_fm():
     t0 = time.perf_counter()
     print("\n=== ISSUE #12 STAGE 2: FOUNDATION MODEL (TabICLv2 & TabPFN V2) FEATURE BUDGET + BLOCK ABLATION (2-Split) ===", flush=True)
-    cache, f0, tm = _load_2splits()
+    cache, f0, _ = _load_2splits()
     fsets = json.load(open(P6_FSETS))
-    imp_df = pd.read_csv(P6_IMP_CSV)
-    # Also load TabM permutation ranking if present to build a consensus FM ranking!
     perm_df = pd.read_csv(P7_PERM_CSV) if os.path.exists(P7_PERM_CSV) else None
 
-    y = cache['y_price']; a = cache['y_area']; nm = cache['normal_mask']
-    # Build ranked dense non-high-card pool (excluding high-card cats and dead *_missing)
     dedup_gbdt = fsets['gbdt_feats']
     fm_pool = [c for c in dedup_gbdt if c not in HIGH_CARD_DROP and not c.endswith('_missing') and c in f0['tr_df'].columns]
-    # Ensure must-keep render & core vision are prioritized in top-40
     prio = [c for c in MUST_KEEP_RENDER if c in fm_pool]
     fm_ranked = prio + [c for c in fm_pool if c not in prio]
 
-    # Consensus ranking: average normalized rank of LGBM gain + TabM permutation!
     if perm_df is not None:
         r_lgb = {c: i for i, c in enumerate(fm_ranked)}
         p_real = perm_df[~perm_df['is_shadow']]['feature'].tolist()
@@ -249,64 +279,34 @@ def stage_fm():
     else:
         fm_consensus = fm_ranked
 
-    def _eval_tabicl(label, cols, tmode='log_real_psqm'):
-        ts = time.perf_counter()
-        out_m = {}
-        for tag, sp in (('f0', f0), ('tm', tm)):
-            Xtr, Xva = _prep_fm(sp['tr_df'], sp['va_df'], cols, max_cat=30, numeric_cats=False)
-            yt = _target_fwd(y[sp['tr_idx']], a[sp['tr_idx']], sp['tr_deflator'], tmode).astype(np.float32)
-            reg = TabICLRegressor(device='mps', n_estimators=8, batch_size=1, use_amp=True, random_state=42)
-            reg.fit(Xtr, yt)
-            p_md = np.asarray(reg.predict(Xva, output_type='median'), dtype=np.float64)
-            del reg; gc.collect(); torch.mps.empty_cache()
-            p_eur = _target_inv(p_md, a[sp['va_idx']], sp['va_deflator'], tmode)
-            m = compute_metrics(y[sp['va_idx']][nm[sp['va_idx']]], p_eur[nm[sp['va_idx']]])
-            out_m[tag] = m
-        dt = time.perf_counter() - ts
-        print(f"  [TabICLv2] {label:28s} ({len(cols):3d}c, {dt:5.1f}s) | f0={out_m['f0']['mdape']:5.2f}% (€{out_m['f0']['mae']:6,.0f}) | tm={out_m['tm']['mdape']:5.2f}% (€{out_m['tm']['mae']:6,.0f} bias {out_m['tm']['bias_pct']:+5.2f}%)", flush=True)
-        return {'cols': cols, 'n_cols': len(cols), 'f0': out_m['f0'], 'tm': out_m['tm']}
-
-    def _eval_tabpfn(label, cols, tmode='log_real_price'):
-        ts = time.perf_counter()
-        out_m = {}
-        for tag, sp in (('f0', f0), ('tm', tm)):
-            Xtr, Xva = _prep_fm(sp['tr_df'], sp['va_df'], cols, max_cat=25, numeric_cats=True)
-            yt = _target_fwd(y[sp['tr_idx']], a[sp['tr_idx']], sp['tr_deflator'], tmode).astype(np.float32)
-            m_pfn = TabPFNRegressor.create_default_for_version(
-                ModelVersion.V2, device='mps', n_estimators=8,
-                ignore_pretraining_limits=True, inference_config={'SUBSAMPLE_SAMPLES': 7500}, random_state=42,
-            )
-            m_pfn.fit(Xtr, yt)
-            p_l = np.asarray(m_pfn.predict(Xva), dtype=np.float64)
-            del m_pfn; gc.collect(); torch.mps.empty_cache()
-            p_eur = _target_inv(p_l, a[sp['va_idx']], sp['va_deflator'], tmode)
-            m = compute_metrics(y[sp['va_idx']][nm[sp['va_idx']]], p_eur[nm[sp['va_idx']]])
-            out_m[tag] = m
-        dt = time.perf_counter() - ts
-        print(f"  [TabPFN  ] {label:28s} ({len(cols):3d}c, {dt:5.1f}s) | f0={out_m['f0']['mdape']:5.2f}% (€{out_m['f0']['mae']:6,.0f}) | tm={out_m['tm']['mdape']:5.2f}% (€{out_m['tm']['mae']:6,.0f} bias {out_m['tm']['bias_pct']:+5.2f}%)", flush=True)
-        return {'cols': cols, 'n_cols': len(cols), 'f0': out_m['f0'], 'tm': out_m['tm']}
+    def _run_iso(kind, label, cols, tmode):
+        subprocess.run(
+            [sys.executable, '-u', __file__, '--stage', 'fm_worker',
+             '--fm-kind', kind, '--fm-label', label, '--fm-tmode', tmode, '--fm-cols', json.dumps(cols)],
+            check=True,
+        )
 
     sw = _load_sweep()
     fm_res = sw.get('fm_sweep', {})
-
-    # 1. Budget sweep on TabICLv2 (fast! ~65s per 2-split test)
     p6_fm = [c for c in fsets['fm_feats'] if c in f0['tr_df'].columns]
     cands_ticl = [
         ('p6_baseline_98', p6_fm),
         ('lgb_top_65', fm_ranked[:65]),
         ('lgb_top_80', fm_ranked[:80]),
-        ('lgb_top_115', fm_ranked[:115]),
+        ('lgb_top_105', fm_ranked[:105]),
         ('consensus_75', fm_consensus[:75]),
         ('consensus_95', fm_consensus[:95]),
-        ('consensus_95_no_pca', [c for c in fm_consensus[:125] if not ('_pca_' in c or 'tfidf_svd_' in c)][:95]),
-        ('consensus_80_no_pca', [c for c in fm_consensus[:120] if not ('_pca_' in c or 'tfidf_svd_' in c)][:80]),
+        ('consensus_95_no_pca', [c for c in fm_consensus[:135] if not ('_pca_' in c or 'tfidf_svd_' in c)][:95]),
+        ('consensus_80_no_pca', [c for c in fm_consensus[:125] if not ('_pca_' in c or 'tfidf_svd_' in c)][:80]),
     ]
     for label, cols in cands_ticl:
         if f'tabicl__{label}' not in fm_res:
-            fm_res[f'tabicl__{label}'] = _eval_tabicl(label, cols)
-            sw['fm_sweep'] = fm_res; _save_sweep(sw)
+            _run_iso('tabicl', label, cols, 'log_real_psqm')
+            fm_res = _load_sweep().get('fm_sweep', {})
+        else:
+            v = fm_res[f'tabicl__{label}']
+            print(f"  [TabICLv2 ckpt] {label:24s} ({v['n_cols']:3d}c) | f0={v['f0']['mdape']:5.2f}% | tm={v['tm']['mdape']:5.2f}%", flush=True)
 
-    # 2. Pick top 3 TabICL winners + P6 baseline and verify on TabPFN V2 (best single Phase-6 model!)
     ticl_scored = sorted(
         [(k.split('__', 1)[1], 0.5 * v['f0']['mdape'] + 0.5 * v['tm']['mdape'], v['cols'])
          for k, v in fm_res.items() if k.startswith('tabicl__')],
@@ -318,8 +318,8 @@ def stage_fm():
             pfn_cands.append((lbl, cols))
     for label, cols in pfn_cands:
         if f'tabpfn__{label}' not in fm_res:
-            fm_res[f'tabpfn__{label}'] = _eval_tabpfn(label, cols)
-            sw['fm_sweep'] = fm_res; _save_sweep(sw)
+            _run_iso('tabpfn', label, cols, 'log_real_price')
+            fm_res = _load_sweep().get('fm_sweep', {})
     print(f"  Stage 2 (FM pruning) done in {time.perf_counter()-t0:.1f}s", flush=True)
 
 
@@ -441,16 +441,23 @@ def stage_finalize():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--stage', choices=['perm', 'fm', 'nn', 'finalize', 'all'], default='all')
+    ap.add_argument('--stage', choices=['perm', 'fm', 'fm_worker', 'nn', 'finalize', 'all'], default='all')
+    ap.add_argument('--fm-kind', default='tabicl')
+    ap.add_argument('--fm-label', default='')
+    ap.add_argument('--fm-tmode', default='log_real_psqm')
+    ap.add_argument('--fm-cols', default='[]')
     args = ap.parse_args()
     if args.stage == 'all':
-        for st in ('perm', 'fm', 'nn', 'finalize'):
+        stages = ['fm', 'nn', 'finalize'] if os.path.exists(P7_PERM_CSV) else ['perm', 'fm', 'nn', 'finalize']
+        for st in stages:
             print(f"\n>>> Issue #12 subprocess stage: {st} <<<", flush=True)
             subprocess.run([sys.executable, '-u', __file__, '--stage', st], check=True)
     elif args.stage == 'perm':
         stage_perm()
     elif args.stage == 'fm':
         stage_fm()
+    elif args.stage == 'fm_worker':
+        _run_fm_worker(args.fm_kind, args.fm_label, args.fm_cols, args.fm_tmode)
     elif args.stage == 'nn':
         stage_nn()
     elif args.stage == 'finalize':
