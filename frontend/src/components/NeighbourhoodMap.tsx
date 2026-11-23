@@ -12,7 +12,7 @@ interface Props {
 type MetricKey = "median_price_sqm" | "avg_listing_duration" | "count" | "pct_underpriced" | "median_delta_pct";
 
 const METRICS: { key: MetricKey; label: string; unit: string }[] = [
-  { key: "median_price_sqm", label: "Median Price/m\u00B2", unit: "\u20AC/m\u00B2" },
+  { key: "median_price_sqm", label: "Median Price/m²", unit: "€/m²" },
   { key: "avg_listing_duration", label: "Avg Duration", unit: "days" },
   { key: "count", label: "Listings", unit: "" },
   { key: "pct_underpriced", label: "% Underpriced", unit: "%" },
@@ -49,8 +49,8 @@ export default function NeighbourhoodMap({ neighbourhoods, onSelect }: Props) {
             onClick={() => setMetric(m.key)}
             className={`px-3 py-1.5 text-sm rounded-md border ${
               metric === m.key
-                ? "bg-blue-600 text-white border-blue-600"
-                : "bg-white text-slate-700 border-slate-200 hover:border-slate-300"
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-card text-muted-foreground border-border hover:border-foreground/30"
             }`}
           >
             {m.label}

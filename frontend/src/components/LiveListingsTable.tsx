@@ -33,7 +33,7 @@ const columns: ColumnDef<LiveListing>[] = [
         href={row.original.url}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-blue-600 hover:underline inline-flex items-center gap-1"
+        className="text-primary hover:underline inline-flex items-center gap-1"
       >
         {row.original.address || `Property ${row.original.property_id}`}
         <ExternalLink className="h-3 w-3 flex-shrink-0" />
@@ -46,21 +46,21 @@ const columns: ColumnDef<LiveListing>[] = [
   },
   {
     accessorKey: "asking_price",
-    header: "Asking (\u20AC)",
+    header: "Asking (€)",
     cell: ({ getValue }) => fmtEur(getValue() as number),
   },
   {
     accessorKey: "predicted_price",
-    header: "Predicted (\u20AC)",
+    header: "Predicted (€)",
     cell: ({ getValue }) => fmtEur(getValue() as number),
   },
   {
     accessorKey: "delta_pct",
-    header: "\u0394 %",
+    header: "Δ %",
     cell: ({ getValue }) => {
       const v = getValue() as number;
       return (
-        <span className={v > 0 ? "text-green-600 font-medium" : "text-red-600 font-medium"}>
+        <span className={v > 0 ? "text-positive font-medium" : "text-negative font-medium"}>
           {v > 0 ? "+" : ""}{v.toFixed(1)}%
         </span>
       );
@@ -68,7 +68,7 @@ const columns: ColumnDef<LiveListing>[] = [
   },
   {
     accessorKey: "livable_area",
-    header: "Area (m\u00B2)",
+    header: "Area (m²)",
     cell: ({ getValue }) => {
       const v = getValue() as number | null;
       return v != null ? v : "\u2014";

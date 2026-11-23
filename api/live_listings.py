@@ -1,6 +1,7 @@
 """Live listings service - parse today's HTML files, predict, cache to CSV."""
 import os
 import glob
+import math
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta, datetime
@@ -97,6 +98,32 @@ class LiveListingsService:
         if not feature_rows:
             self.listings_df = pd.DataFrame()
             return
+
+        # Phase 3b: Batch OSMnx street_type lookup
+        lats = [r.get("latitude") for r in feature_rows]
+        lons = [r.get("longitude") for r in feature_rows]
+        valid_mask = [lat is not None and lon is not None for lat, lon in zip(lats, lons)]
+        valid_lats = [lat for lat, v in zip(lats, valid_mask) if v]
+        valid_lons = [lon for lon, v in zip(lons, valid_mask) if v]
+
+        if valid_lats:
+            print(f"  Batch street_type lookup for {len(valid_lats)} properties...")
+            street_types, distances = self.prediction_service.batch_lookup_street_types(
+                valid_lats, valid_lons)
+            j = 0
+            for i, is_valid in enumerate(valid_mask):
+                if is_valid:
+                    feature_rows[i]["street_type"] = street_types[j]
+                    feature_rows[i]["distance_to_street"] = distances[j]
+                    j += 1
+
+        # Phase 3c: Apply imputation for missing values
+        ps = self.prediction_service
+        if ps.imputation_models:
+            for i, feat in enumerate(feature_rows):
+                asking = meta_rows[i].get("asking_price_eur")
+                livable = feat.get("livable_area")
+                feature_rows[i] = ps._impute_missing(feat, asking, livable)
 
         # Phase 4: Single batch predict call
         features_df = pd.DataFrame(feature_rows)
@@ -236,8 +263,9 @@ class LiveListingsService:
         else:
             row["neighbourhood"] = "Unknown"
 
+        # street_type and distance_to_street set in batch by _generate()
         row["street_type"] = ps._get_street_type(parsed.get("street", ""))
-        row["distance_to_street"] = 0
+        row["distance_to_street"] = 0  # overwritten by batch OSMnx lookup
 
         pub_date = parsed.get("publication_date")
         mod_date = parsed.get("last_modification_date")
@@ -257,8 +285,19 @@ class LiveListingsService:
         description = parsed.get("description", "")
         row["has_meaningful_description"] = 1 if description and len(str(description)) > 50 else 0
 
+        # Spatial lag from training data
+        lat, lon = row.get("latitude"), row.get("longitude")
+        if lat and lon and self.data_loader:
+            spatial_lag, avg_dist = self.data_loader.compute_spatial_lag(lat, lon)
+            row["spatial_lag_10"] = spatial_lag
+            row["avg_dist_5nn"] = avg_dist
+        else:
+            row["spatial_lag_10"] = None
+            row["avg_dist_5nn"] = None
+
+        macro = ps._get_macro_indicators()
         for col in ["belgian_cpi_index", "belgian_10y_yield", "euribor_12m"]:
-            row[col] = None
+            row[col] = macro.get(col)
 
         # Metadata for output (not fed to model)
         asking_price = parsed.get("price")
@@ -303,9 +342,18 @@ class LiveListingsService:
             return []
         df = self.listings_df
         if neighbourhood:
-            df = df[df["neighbourhood"] == neighbourhood]
+            # Match both normalized ("BrugsePoort_Rooigem") and display ("Brugse Poort - Rooigem") names
+            def _normalize(s):
+                return s.replace(" ", "").replace("-", "_").lower() if isinstance(s, str) else ""
+            norm_query = _normalize(neighbourhood)
+            df = df[df["neighbourhood"].apply(_normalize) == norm_query]
         df = df.sort_values("delta_pct", ascending=False, na_position="last")
-        return df.to_dict(orient="records")
+        records = df.to_dict(orient="records")
+        for row in records:
+            for k, v in row.items():
+                if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                    row[k] = None
+        return records
 
     def get_count(self):
         """Return total count and date used."""

@@ -18,7 +18,7 @@ export default function NeighbourhoodsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Neighbourhood Dashboard</h1>
+        <h1 className="font-display text-3xl font-bold tracking-tight">Neighbourhood Dashboard</h1>
         <p className="text-muted-foreground">Market analytics across Ghent neighbourhoods</p>
       </div>
 
