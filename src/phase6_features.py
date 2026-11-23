@@ -422,11 +422,16 @@ def build_phase6_splits():
     qwen3 = np.load(QWEN3_PATH)['embeddings'].astype(np.float32)
     assert len(e5l) == len(df) and len(qwen3) == len(df)
 
-    # Load Full-Corpus Vision embeddings if ready!
+    # Load Full-Corpus Vision embeddings if ready! (Extract arrays ONCE outside loop — NpzFile decompresses on every key lookup!)
     vis_bundle = None
     if os.path.exists(VIS_FULL_PATH):
         vz = np.load(VIS_FULL_PATH, allow_pickle=True)
         v_pids = [str(p) for p in vz['property_id']]
+        vz_sig = vz['sig_real'].astype(np.float32)
+        vz_so = vz['so_sheet'].astype(np.float32)
+        vz_ren = vz['render_feats'].astype(np.float32)
+        vz_q = vz['q_feats'].astype(np.float32)
+        vz_soq = vz['so_q_feats'].astype(np.float32)
         p2i = {p: idx for idx, p in enumerate(v_pids)}
         N = len(df)
         sig_real = np.full((N, 768), np.nan, dtype=np.float32)
@@ -437,12 +442,12 @@ def build_phase6_splits():
         has_vis = np.zeros(N, dtype=bool)
         for row_i, pid in enumerate(df['property_id'].values):
             vi = p2i.get(pid)
-            if vi is not None and not np.isnan(vz['sig_real'][vi, 0]):
-                sig_real[row_i] = vz['sig_real'][vi]
-                so_sheet[row_i] = vz['so_sheet'][vi]
-                render_f[row_i] = vz['render_feats'][vi]
-                q_f[row_i] = vz['q_feats'][vi]
-                so_q_f[row_i] = vz['so_q_feats'][vi]
+            if vi is not None and not np.isnan(vz_sig[vi, 0]):
+                sig_real[row_i] = vz_sig[vi]
+                so_sheet[row_i] = vz_so[vi]
+                render_f[row_i] = vz_ren[vi]
+                q_f[row_i] = vz_q[vi]
+                so_q_f[row_i] = vz_soq[vi]
                 has_vis[row_i] = True
         vis_bundle = {
             'sig_real': sig_real, 'so_sheet': so_sheet,

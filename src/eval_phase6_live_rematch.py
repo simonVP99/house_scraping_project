@@ -154,7 +154,8 @@ def stage_prep():
     fr_e5l = fr_e5['e5l'].astype(np.float32)
     fr_e5s = fr_e5['e5s'].astype(np.float32)
     fr_qw_z = np.load(FRESH_QWEN_NPZ, allow_pickle=True)
-    fr_qw_map = {str(p): fr_qw_z['embeddings'][i] for i, p in enumerate(fr_qw_z['property_id'])}
+    fr_qw_embs = fr_qw_z['embeddings'].astype(np.float32)
+    fr_qw_map = {str(p): fr_qw_embs[i] for i, p in enumerate(fr_qw_z['property_id'])}
     fr_qw = np.vstack([fr_qw_map.get(pid, np.zeros(1024, dtype=np.float32)) for pid in fresh_tr['property_id'].values]).astype(np.float32)
 
     assert len(fr_e5l) == n_fr and len(fr_qw) == n_fr
@@ -162,8 +163,13 @@ def stage_prep():
     e5s = np.vstack([tr_e5s, fr_e5s])
     qwen3 = np.vstack([tr_qw, fr_qw])
 
-    # Vision full embeddings aligned to BOTH train (14,599) + fresh (1,227)!
+    # Vision full embeddings aligned to BOTH train (14,599) + fresh (1,227)! (Extract ONCE outside loop!)
     vz = np.load(VIS_FULL_PATH, allow_pickle=True)
+    vz_sig = vz['sig_real'].astype(np.float32)
+    vz_so = vz['so_sheet'].astype(np.float32)
+    vz_ren = vz['render_feats'].astype(np.float32)
+    vz_q = vz['q_feats'].astype(np.float32)
+    vz_soq = vz['so_q_feats'].astype(np.float32)
     p2i = {str(p): i for i, p in enumerate(vz['property_id'])}
     N = len(both)
     sig_real = np.full((N, 768), np.nan, dtype=np.float32)
@@ -174,12 +180,12 @@ def stage_prep():
     has_vis = np.zeros(N, dtype=bool)
     for r_i, pid in enumerate(both['property_id'].values):
         vi = p2i.get(pid)
-        if vi is not None and not np.isnan(vz['sig_real'][vi, 0]):
-            sig_real[r_i] = vz['sig_real'][vi]
-            so_sheet[r_i] = vz['so_sheet'][vi]
-            render_f[r_i] = vz['render_feats'][vi]
-            q_f[r_i] = vz['q_feats'][vi]
-            so_q_f[r_i] = vz['so_q_feats'][vi]
+        if vi is not None and not np.isnan(vz_sig[vi, 0]):
+            sig_real[r_i] = vz_sig[vi]
+            so_sheet[r_i] = vz_so[vi]
+            render_f[r_i] = vz_ren[vi]
+            q_f[r_i] = vz_q[vi]
+            so_q_f[r_i] = vz_soq[vi]
             has_vis[r_i] = True
     print(f"  Vision matched: train={has_vis[:n_tr].sum():,}/{n_tr:,} | fresh={has_vis[n_tr:].sum():,}/{n_fr:,} ({100*has_vis[n_tr:].mean():.1f}%)", flush=True)
     vis_bundle = {'sig_real': sig_real, 'so_sheet': so_sheet, 'render_feats': render_f, 'q_feats': q_f, 'so_q_feats': so_q_f, 'has_vis': has_vis}
