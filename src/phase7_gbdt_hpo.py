@@ -75,7 +75,8 @@ def _eval_split(kind, tr_df, va_df, tr_y, va_y, tr_a, va_a, tr_d, va_d, tr_cids,
         tr_sub = tr_df.iloc[tm_m]; va_sub = va_df.iloc[vm_m]
         tr_y = tr_y[tm_m]; tr_a = tr_a[tm_m]; tr_d = tr_d[tm_m]; tr_cids = tr_cids[tm_m]
         va_a = va_a[vm_m]; va_d = va_d[vm_m]
-    Xtr, Xva, cat_cols = prep_tree_df(tr_sub, va_sub, use_cols)
+    Xtr, cat_cols = prep_tree_df(tr_sub, use_cols)
+    Xva, _ = prep_tree_df(va_sub, use_cols)
     ytr = _target_fwd(tr_y, tr_a, tr_d, tmode)
 
     u_c = np.unique(tr_cids)
