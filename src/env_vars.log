@@ -1,8 +1,0 @@
-SHELL=/bin/bash
-USER=simon
-PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-PWD=/Users/simon
-HOME=/Users/simon
-SHLVL=2
-LOGNAME=simon
-_=/usr/bin/env
