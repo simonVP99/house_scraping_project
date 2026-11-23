@@ -42,6 +42,9 @@ PREDS_NPZ = os.path.join(WORK_DIR, 'phase6_frontier_preds.npz')
 REPORT_JSON = os.path.join(WORK_DIR, 'phase6_report.json')
 
 
+import numpy as np
+
+
 # ---------------------------------------------------------------------------
 # Shared Checkpoint & Target Helpers
 # ---------------------------------------------------------------------------
