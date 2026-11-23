@@ -485,7 +485,45 @@ def stage_eval():
     meta.to_csv(LIVE_CSV, index=False)
 
     y = b['y_fr']
-    uc = meta['is_ultraclean_zero_leak'].fillna(False).to_numpy(bool)
+    uc = meta['is_ultraclean_zero_leak'].fillna(False).to_numpy(bool) if 'is_ultraclean_zero_leak' in meta.columns else None
+    if uc is None:
+        # Compute exact 3-layer zero-leak audit on the fly (exact + coord/area + E5>0.96)
+        from scipy.spatial import cKDTree
+        tr_df_a = pd.read_parquet(DATASET_PATH)
+        tr_df_a['property_id'] = tr_df_a['property_id'].astype(str)
+        raw_old = pd.read_parquet(RAW_PARQUET, columns=['property_id', 'date_obtained'])
+        raw_old['property_id'] = raw_old['property_id'].astype(str)
+        old_pids = set(raw_old[~raw_old['date_obtained'].isin(['22112026', '23112026'])]['property_id'])
+        tr_pids = set(tr_df_a['property_id'])
+        tr_keys = set(tr_df_a['property_key'].astype(str))
+        # Exact unseen
+        fr_pids = meta['property_id'].astype(str).values
+        fr_keys = meta['property_key'].astype(str).values if 'property_key' in meta.columns else np.array([''] * len(meta))
+        exact_u = np.array([(p not in tr_pids) and (p not in old_pids) and (k not in tr_keys) for p, k in zip(fr_pids, fr_keys)], dtype=bool)
+        # Coord/area + E5 cosine leak
+        tr_xy = np.column_stack([tr_df_a['latitude'].to_numpy(float) * 111320.0, tr_df_a['longitude'].to_numpy(float) * 70200.0])
+        fr_xy = np.column_stack([b['sp']['va_df']['latitude'].to_numpy(float) * 111320.0, b['sp']['va_df']['longitude'].to_numpy(float) * 70200.0])
+        tree = cKDTree(tr_xy)
+        tr_area = tr_df_a['livable_area'].to_numpy(float)
+        fr_area = b['area_fr']
+        tr_e5l = np.load(E5_LARGE_PATH)['embeddings'].astype(np.float32)
+        fr_e5l = np.load(FRESH_E5_NPZ)['e5l'].astype(np.float32)
+        coord_leak = np.zeros(len(meta), dtype=bool)
+        text_leak = np.zeros(len(meta), dtype=bool)
+        for i in range(len(meta)):
+            near25 = tree.query_ball_point(fr_xy[i], 25.0)
+            if near25 and np.any(np.abs(tr_area[near25] - fr_area[i]) / np.maximum(fr_area[i], 1.0) <= 0.08):
+                coord_leak[i] = True
+            sims = tr_e5l @ fr_e5l[i]
+            if sims.max() > 0.985:
+                text_leak[i] = True
+            else:
+                near250 = tree.query_ball_point(fr_xy[i], 250.0)
+                if near250 and sims[near250].max() > 0.96:
+                    text_leak[i] = True
+        uc = exact_u & (~coord_leak) & (~text_leak)
+        meta['is_ultraclean_zero_leak'] = uc
+        meta.to_csv(LIVE_CSV, index=False)
     in_dom = y <= 1_500_000
     norm_m = (y >= 150_000) & (y <= 800_000)
     ih = b['house_fr'] == 1
@@ -503,8 +541,8 @@ def stage_eval():
         if mask.sum() == 0:
             continue
         m6 = compute_metrics(y[mask], p6_pred[mask])
-        p4_col = 'p4_ens_pred' if 'p4_ens_pred' in meta.columns else ('pred_phase4' if 'pred_phase4' in meta.columns else None)
-        p1_col = 'p1_lgbm_pred' if 'p1_lgbm_pred' in meta.columns else ('pred_phase1' if 'pred_phase1' in meta.columns else None)
+        p4_col = next((c for c in ('pred_phase4_ens_eur', 'p4_ens_pred', 'pred_phase4') if c in meta.columns), None)
+        p1_col = next((c for c in ('pred_phase1_base_eur', 'p1_lgbm_pred', 'pred_phase1') if c in meta.columns), None)
         m4 = compute_metrics(y[mask], meta[p4_col].to_numpy(float)[mask]) if p4_col else None
         m1 = compute_metrics(y[mask], meta[p1_col].to_numpy(float)[mask]) if p1_col else None
         rep[label] = {'n': int(mask.sum()), 'phase6': m6, 'phase4': m4, 'phase1': m1}
