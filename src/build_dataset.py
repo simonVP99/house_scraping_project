@@ -35,11 +35,18 @@ def _read_input(path: str) -> pd.DataFrame:
     return pd.read_csv(path, low_memory=False)
 
 
+def _default_input_path() -> str:
+    full_parquet = os.path.join(BASE_DIR, 'outputs/property_data_full.parquet')
+    if os.path.exists(full_parquet):
+        return full_parquet
+    return os.path.join(BASE_DIR, 'outputs/property_data_raw.csv')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description='Build a validated training dataset from parser output.')
     parser.add_argument('--input',
-                        default=os.path.join(BASE_DIR, 'outputs/property_data_raw.csv'),
+                        default=_default_input_path(),
                         help='parser output (CSV or Parquet)')
     parser.add_argument('--output-dir',
                         default=os.path.join(BASE_DIR, 'outputs/dataset'),

@@ -83,45 +83,128 @@ def tri_state_bool(value):
 
 
 # =============================================================================
-# Amenity recovery from free text
+# Amenity & Quantitative Field Recovery from Free Text
 # =============================================================================
 
 # NL / FR / EN keywords.  Matched case-insensitively on a description that the
 # agency wrote by hand, so recall matters more than precision here.
 _AMENITY_PATTERNS = {
-    'has_garden': re.compile(r'\b(tuin|jardin|garden|voortuin|achtertuin)\b', re.I),
-    'has_terrace': re.compile(r'\b(terras|terrasse|terrace|dakterras)\b', re.I),
+    'has_garden': re.compile(r'\b(tuin|jardin|garden|voortuin|achtertuin|stadstuin)\b', re.I),
+    'has_terrace': re.compile(r'\b(terras|terrasse|terrace|dakterras|zonneterras)\b', re.I),
     'has_swimming_pool': re.compile(r'\b(zwembad|piscine|swimming pool)\b', re.I),
-    'has_basement': re.compile(r'\b(kelder|sous-sol|basement)\b', re.I),
+    'has_basement': re.compile(r'\b(kelder|sous-sol|basement|onderkelderd)\b', re.I),
     'has_attic': re.compile(r'\b(zolder|grenier|attic)\b', re.I),
     'has_lift': re.compile(r'\b(lift|ascenseur|elevator)\b', re.I),
+    'has_photovoltaic_panels': re.compile(
+        r'\b(zonnepanelen|panneaux\s+solaires|panneaux\s+photovolta[ïi]ques|solar\s+panels|pv[\s-]?panelen)\b', re.I),
+    'has_heat_pump': re.compile(
+        r'\b(warmtepomp|pompe\s+[àa]\s+chaleur|heat\s+pump|geothermische)\b', re.I),
+    'has_double_glazing': re.compile(
+        r'\b(dubbel(?:e)?\s+beglazing|dubbel\s+glas|hr[\+\s-]*glas|double\s+vitrage|triple\s+vitrage|driedubbel\s+glas|hoogrendementsglas)\b', re.I),
+    'has_air_conditioning': re.compile(
+        r'\b(airco|airconditioning|climatisation)\b', re.I),
 }
 
 # "geen tuin", "zonder terras", "sans jardin", "no garden", "pas de jardin"
+# Does not cross clause separators ("met", "avec", "with", "en", punctuation).
 _NEGATION = re.compile(
-    r'\b(geen|zonder|sans|no|pas de|aucun[e]?|niet)\b[\s\w]{0,15}$', re.I)
+    r'\b(geen|zonder|sans|no|pas de|aucun[e]?|niet)\s+'
+    r'(?:(?!\b(?:met|avec|with|en|maar|et|and)\b)[a-zA-ZÀ-ÿ\s]){0,15}$', re.I)
+
+_EPC_REFERENCE_RE = re.compile(r'^(\d{4})(\d{2})\d{2}-?\d+(?:-[A-Z]+)?-(\d+)$')
+_TEXT_EPC_KWH_RE = re.compile(
+    r'\bepc\b[^.\n]{0,40}?(\d{2,4})\s*kwh\s*/\s*\(?m(?:2|²)\)?', re.I)
+_TEXT_EPC_LABEL_RE = re.compile(
+    r'\b(?:epc|energiescore|energielabel|peb)\s*(?:score|label|klasse|-waarde|:)?\s*([A-F](?:\+{1,2})?)\b', re.I)
+_TEXT_YEAR_BUILT_RE = re.compile(
+    r'\b(?:bouwjaar|gebouwd\s+in|annee\s+de\s+construction|construit\s+en|built\s+in)\s*[:\-]?\s*(1[89]\d{2}|20[0-2]\d)\b', re.I)
+_TEXT_CADASTRAL_RE = re.compile(
+    r'\b(?:kadastraal\s+inkomen|k\.?i\.?|revenu\s+cadastral)\s*(?:\([^)]*\))?\s*[:\-=]?\s*(?:€|eur)?\s*(\d{3,5})\b', re.I)
+
+
+def parse_epc_reference(ref):
+    """Extract (certificate_year, revision_number) from a Flemish EPC reference.
+
+    Flemish EPC references follow ``YYYYMMDD-NNNNNNNNNN-RES-V`` (or older
+    ``YYYYMMDD-NNNNNNNNNN-V``).  The inspection year distinguishes a fresh
+    post-renovation certificate from a stale 2013 one, and revision > 1
+    indicates the certificate was re-issued.
+    """
+    if not ref or not isinstance(ref, str):
+        return None, None
+    match = _EPC_REFERENCE_RE.match(ref.strip())
+    if not match:
+        return None, None
+    year = int(match.group(1))
+    revision = int(match.group(3))
+    if not (2008 <= year <= 2030):
+        return None, None
+    return year, revision
 
 
 def recover_amenities_from_text(description, row):
-    """Fill tri-state *unknown* amenity flags from the description text.
+    """Fill tri-state *unknown* amenity flags and key missing metrics from text.
 
     Only touches columns whose value is currently ``None`` -- an explicit form
-    value always wins.  Returns the list of column names that were recovered.
+    value always wins.  Explicit negations ("geen tuin", "zonder lift") set
+    the flag to ``False`` rather than leaving it unknown.
+    Returns the list of column names that were recovered.
     """
     recovered = []
-    if not description:
+    texts = [
+        t for t in (
+            description,
+            row.get('description_nl'),
+            row.get('description_fr'),
+        ) if isinstance(t, str) and t.strip()
+    ]
+    if not texts:
         return recovered
+    combined = '\n'.join(texts)
+
     for column, pattern in _AMENITY_PATTERNS.items():
         if row.get(column) is not None:
             continue
-        match = pattern.search(description)
+        match = pattern.search(combined)
         if not match:
             continue
-        prefix = description[max(0, match.start() - 25):match.start()]
+        prefix = combined[max(0, match.start() - 25):match.start()]
         if _NEGATION.search(prefix):
-            continue
-        row[column] = True
+            row[column] = False
+        else:
+            row[column] = True
         recovered.append(column)
+
+    if row.get('primary_energy_consumption') is None:
+        m = _TEXT_EPC_KWH_RE.search(combined)
+        if m:
+            val = float(m.group(1))
+            if 10 <= val <= 1500:
+                row['primary_energy_consumption'] = val
+                recovered.append('primary_energy_consumption')
+
+    if row.get('energy_label') is None:
+        m = _TEXT_EPC_LABEL_RE.search(combined)
+        if m:
+            label = m.group(1).upper()
+            if label in {'A++', 'A+', 'A', 'B', 'C', 'D', 'E', 'F'}:
+                row['energy_label'] = label
+                recovered.append('energy_label')
+
+    if row.get('year_built') is None:
+        m = _TEXT_YEAR_BUILT_RE.search(combined)
+        if m:
+            row['year_built'] = int(m.group(1))
+            recovered.append('year_built')
+
+    if row.get('cadastral_income') is None:
+        m = _TEXT_CADASTRAL_RE.search(combined)
+        if m:
+            val = int(m.group(1))
+            if 100 <= val <= 15000:
+                row['cadastral_income'] = val
+                recovered.append('cadastral_income')
+
     return recovered
 
 
@@ -418,6 +501,14 @@ def build_row(data, property_id, date_str):
 
     description = pick_description(property_details)
     description_language = pick_description_language(property_details, description)
+    epc_cert_year, epc_cert_revision = parse_epc_reference(
+        certificates_data.get('epcReference'))
+    first_customer = (customers_data[0] or {}) if customers_data else {}
+    poi_types = {
+        p.get('type') for p in (location_data.get('pointsOfInterest') or [])
+        if isinstance(p, dict) and p.get('type')
+    }
+    cluster_data = data.get('cluster')
 
     row = {
         # ---- Property identification ----
@@ -432,7 +523,8 @@ def build_row(data, property_id, date_str):
         'price_type': price_data.get('type'),
         'price_min': price_data.get('minRangeValue'),
         'price_max': price_data.get('maxRangeValue'),
-        'price_old_value': price_data.get('oldValue'),
+        'price_old_value': _safe_get(price_data, 'oldValue', default=sale_data.get('oldPrice')),
+        'has_starting_price': tri_state_bool(sale_data.get('hasStartingPrice')),
 
         # ---- Property type ----
         'property_type': _safe_get(property_details, 'type', default=data.get('type')),
@@ -515,11 +607,38 @@ def build_row(data, property_id, date_str):
         # ---- Energy ----
         'energy_label': certificates_data.get('epcScore'),
         'primary_energy_consumption': certificates_data.get('primaryEnergyConsumptionPerSqm'),
+        'carbon_emission': certificates_data.get('carbonEmission'),
+        'epc_cert_year': epc_cert_year,
+        'epc_cert_revision': epc_cert_revision,
         'heating_type': energy_data.get('heatingType'),
         'has_photovoltaic_panels': tri_state_bool(energy_data.get('hasPhotovoltaicPanels')),
         'has_double_glazing': tri_state_bool(energy_data.get('hasDoubleGlazing')),
         'has_heat_pump': tri_state_bool(energy_data.get('hasHeatPump')),
         'has_thermic_panels': tri_state_bool(energy_data.get('hasThermicPanels')),
+        'has_collective_water_heater': tri_state_bool(
+            energy_data.get('hasCollectiveWaterHeater')),
+
+        # ---- Security, accessibility & comfort ----
+        'has_disabled_access': tri_state_bool(property_details.get('hasDisabledAccess')),
+        'has_armored_door': tri_state_bool(property_details.get('hasArmoredDoor')),
+        'has_visiophone': tri_state_bool(property_details.get('hasVisiophone')),
+        'has_door_phone': tri_state_bool(property_details.get('hasDoorPhone')),
+        'has_secure_access_alarm': tri_state_bool(
+            property_details.get('hasSecureAccessAlarm')),
+        'has_cable_tv': tri_state_bool(property_details.get('hasCableTV')),
+        'has_internet': tri_state_bool(property_details.get('hasInternet')),
+        'has_sauna': tri_state_bool(property_details.get('hasSauna')),
+        'has_jacuzzi': tri_state_bool(property_details.get('hasJacuzzi')),
+        'fireplace_exists': tri_state_bool(property_details.get('fireplaceExists')),
+        'is_holiday_property': tri_state_bool(
+            specificities_data.get('isHolidayProperty')),
+
+        # ---- Seller & project context ----
+        'seller_type': clean_text(first_customer.get('type'), 40),
+        'is_multi_unit_project': isinstance(cluster_data, dict) and bool(cluster_data),
+        'has_poi_school': 'SCHOOL' in poi_types if poi_types else None,
+        'has_poi_shops': 'SHOPS' in poi_types if poi_types else None,
+        'has_poi_transport': 'TRANSPORT' in poi_types if poi_types else None,
 
         # ---- Flood risk / planning ----
         'flood_zone_type': construction_permit_data.get('floodZoneType'),

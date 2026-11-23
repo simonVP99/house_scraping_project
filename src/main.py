@@ -2,12 +2,13 @@ import argparse
 import time
 import os
 import polars as pl
-from scraper import scrape_houses
-from parser import parse_data_folder_parallel
+from parser import parse_data_folder_parallel, parse_snapshot_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_FOLDER = os.path.join(BASE_DIR, 'data')
 OUTPUT_FILE = os.path.join(BASE_DIR, 'outputs/property_data_raw.csv')
+FULL_PARQUET_FILE = os.path.join(BASE_DIR, 'outputs/property_data_full.parquet')
+FULL_CSV_FILE = os.path.join(BASE_DIR, 'outputs/property_data_full.csv')
 FAILURES_FILE = os.path.join(BASE_DIR, 'outputs/parse_failures.csv')
 MANIFEST_FILE = os.path.join(BASE_DIR, 'outputs/parse_manifest.json')
 
@@ -73,15 +74,29 @@ def main():
                         help='Skip scraping and only run the parse stage.')
     parser.add_argument('--full-reparse', action='store_true',
                         help='Ignore the manifest and re-parse every HTML file.')
+    parser.add_argument('--from-snapshots', action='store_true',
+                        help='Parse the full corpus from data/.snapshots instead '
+                             'of HTML files and write property_data_full.{parquet,csv}.')
     args = parser.parse_args()
 
     if not args.skip_scrape:
+        from scraper import scrape_houses
         scrape_houses(args.num_pages)
     else:
         print('Skipping scrape stage.')
 
     print('Start Parsing House Data')
     start_time = time.time()
+
+    if args.from_snapshots:
+        df, errors = parse_snapshot_store(DATA_FOLDER)
+        duration = time.time() - start_time
+        print(f"Time taken to parse snapshot store: {duration:.2f} seconds")
+        os.makedirs(os.path.dirname(FULL_PARQUET_FILE), exist_ok=True)
+        df.write_parquet(FULL_PARQUET_FILE)
+        df.write_csv(FULL_CSV_FILE)
+        print(f"Snapshot extraction completed: {df.height} rows x {df.width} cols -> {FULL_PARQUET_FILE}")
+        return
 
     # Default to incremental when a manifest already exists: re-reading 50GB of
     # HTML to pick up a few hundred new files is the single largest avoidable

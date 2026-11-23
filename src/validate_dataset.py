@@ -117,6 +117,11 @@ def build_training_spec() -> DatasetSpec:
         ColumnSpec('latitude', required=True),
         ColumnSpec('longitude', required=True),
         ColumnSpec('dist_from_center', required=True, minimum=0.0),
+        ColumnSpec('year_built', minimum=1700.0, maximum=2100.0),
+        ColumnSpec('cadastral_income', minimum=1.0, maximum=25_000.0),
+        ColumnSpec('number_of_bathrooms', minimum=1.0, maximum=20.0),
+        ColumnSpec('number_of_toilets', minimum=1.0, maximum=20.0),
+        ColumnSpec('energy_label', allowed=('A++', 'A+', 'A', 'B', 'C', 'D', 'E', 'F')),
     )
     return spec
 
@@ -491,6 +496,28 @@ def check_cross_field_consistency(df: pd.DataFrame) -> list[CheckResult]:
             'bedrooms_exceed_rooms', WARNING, not bad.any(),
             int(bad.sum()), int((beds.notna() & rooms.notna()).sum()),
             'number_of_bedrooms > number_of_rooms',
+        ))
+
+    # Apartments should not carry a positive land plot surface (property_size).
+    if {'property_size', 'property_type_APARTMENT'}.issubset(df.columns):
+        plot = pd.to_numeric(df['property_size'], errors='coerce')
+        is_apt = df['property_type_APARTMENT'] == 1
+        bad = is_apt & plot.notna() & (plot > 0)
+        results.append(CheckResult(
+            'apartment_has_land_plot', WARNING, not bad.any(),
+            int(bad.sum()), int(is_apt.sum()),
+            'APARTMENT with property_size > 0',
+        ))
+
+    # Sub-room surface cannot exceed total livable_area.
+    if {'bedroom_surface_sum', 'livable_area'}.issubset(df.columns):
+        b_sum = pd.to_numeric(df['bedroom_surface_sum'], errors='coerce')
+        area = pd.to_numeric(df['livable_area'], errors='coerce')
+        bad = b_sum.notna() & area.notna() & (b_sum > area)
+        results.append(CheckResult(
+            'bedroom_surface_exceeds_livable', WARNING, not bad.any(),
+            int(bad.sum()), int(area.notna().sum()),
+            'bedroom_surface_sum > livable_area',
         ))
 
     # Build year beyond this year is legitimate for new-build listings that carry

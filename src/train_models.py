@@ -46,9 +46,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _fetch_ecb_series(url, value_col_name):
     """Fetch a single monthly time series from ECB SDW API."""
-    req = urllib.request.Request(url, headers={'Accept': 'text/csv'})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = resp.read().decode()
+    import requests
+    resp = requests.get(url, headers={'Accept': 'text/csv'}, timeout=30)
+    resp.raise_for_status()
+    data = resp.text
     reader = csv.DictReader(io.StringIO(data))
     result = {}
     for row in reader:
@@ -59,28 +60,101 @@ def _fetch_ecb_series(url, value_col_name):
     ])
 
 
+def _fetch_statbel_cpi():
+    """Fetch official Belgian CPI & YoY inflation from Statbel (live through 2026)."""
+    import zipfile
+    import requests
+    url = (
+        'https://statbel.fgov.be/sites/default/files/files/opendata/'
+        'Consumptieprijsindex%20en%20gezondheidsindex/CPI%20All%20base%20years.zip'
+    )
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    with zf.open(zf.namelist()[0]) as handle:
+        raw = pd.read_csv(handle, sep='|')
+
+    # Use 2013=100 for continuous index across 2020-2026 and 2025=100 for YoY CPI inflation
+    b2013 = raw[(raw['NM_BASE_YR'] == 2013) & (raw['NM_YR'] >= 2020)].copy()
+    b2013['year_month'] = pd.to_datetime(
+        b2013['NM_YR'].astype(str) + '-' + b2013['NM_MTH'].astype(str).str.zfill(2) + '-01'
+    )
+    b2013['belgian_cpi_index'] = pd.to_numeric(b2013['MS_CPI_IDX'], errors='coerce')
+    b2013['belgian_health_index'] = pd.to_numeric(b2013['MS_HLTH_IDX'], errors='coerce')
+    b2013 = b2013.sort_values('year_month').drop_duplicates('year_month')
+    b2013['belgian_cpi_yoy_pct'] = b2013['belgian_cpi_index'].pct_change(12) * 100.0
+    return b2013[['year_month', 'belgian_cpi_index', 'belgian_health_index', 'belgian_cpi_yoy_pct']]
+
+
+def _fetch_eurostat_belgian_hpi():
+    """Fetch quarterly Belgian House Price Index (2015=100) from Eurostat prc_hpi_q."""
+    import requests
+    url = (
+        'https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/data/'
+        'prc_hpi_q/Q.TOTAL.I15_Q.BE?startPeriod=2020-Q1&format=SDMX-CSV'
+    )
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    df = pd.read_csv(io.StringIO(resp.text))
+    rows = []
+    for _, row in df.iterrows():
+        tp = str(row['TIME_PERIOD'])
+        val = pd.to_numeric(row['OBS_VALUE'], errors='coerce')
+        if '-Q' in tp and pd.notna(val):
+            yr, q = tp.split('-Q')
+            start_month = (int(q) - 1) * 3 + 1
+            for offset in range(3):
+                rows.append({
+                    'year_month': pd.Timestamp(f'{yr}-{start_month + offset:02d}-01'),
+                    'belgian_hpi_index': float(val),
+                })
+    return pd.DataFrame(rows).drop_duplicates('year_month')
+
+
 def fetch_macro_indicators():
-    """Fetch monthly macro indicators from ECB: CPI index, Belgian 10Y yield, Euribor 12m."""
-    indicators = {
-        'belgian_cpi_index': 'https://data-api.ecb.europa.eu/service/data/ICP/M.BE.N.000000.4.INX?startPeriod=2024-01&endPeriod=2026-12&format=csvdata',
-        'belgian_10y_yield': 'https://data-api.ecb.europa.eu/service/data/IRS/M.BE.L.L40.CI.0000.EUR.N.Z?startPeriod=2024-01&endPeriod=2026-12&format=csvdata',
-        'euribor_12m': 'https://data-api.ecb.europa.eu/service/data/FM/M.U2.EUR.RT.MM.EURIBOR1YD_.HSTA?startPeriod=2024-01&endPeriod=2026-12&format=csvdata',
+    """Fetch complete monthly macro indicators: Statbel CPI/inflation, ECB yields/Euribor/mortgage rates, Eurostat HPI."""
+    series_frames = []
+    try:
+        cpi = _fetch_statbel_cpi()
+        series_frames.append(cpi)
+        print(f"  Fetched {len(cpi)} months of Statbel Belgian CPI & Health Index")
+    except Exception as e:
+        print(f"  Could not fetch Statbel CPI: {e}")
+
+    ecb_indicators = {
+        'belgian_10y_yield': 'https://data-api.ecb.europa.eu/service/data/IRS/M.BE.L.L40.CI.0000.EUR.N.Z?startPeriod=2020-01&endPeriod=2026-12&format=csvdata',
+        'euribor_12m': 'https://data-api.ecb.europa.eu/service/data/FM/M.U2.EUR.RT.MM.EURIBOR1YD_.HSTA?startPeriod=2020-01&endPeriod=2026-12&format=csvdata',
+        'euribor_3m': 'https://data-api.ecb.europa.eu/service/data/FM/M.U2.EUR.RT.MM.EURIBOR3MD_.HSTA?startPeriod=2020-01&endPeriod=2026-12&format=csvdata',
+        'be_mortgage_rate_avg': 'https://data-api.ecb.europa.eu/service/data/MIR/M.BE.B.A2C.AM.R.A.2250.EUR.N?startPeriod=2020-01&endPeriod=2026-12&format=csvdata',
+        'be_mortgage_rate_fix10y': 'https://data-api.ecb.europa.eu/service/data/MIR/M.BE.B.A2C.O.R.A.2250.EUR.N?startPeriod=2020-01&endPeriod=2026-12&format=csvdata',
     }
-    merged = None
-    for col_name, url in indicators.items():
+    for col_name, url in ecb_indicators.items():
         try:
             series = _fetch_ecb_series(url, col_name)
-            if merged is None:
-                merged = series
-            else:
-                merged = merged.merge(series, on='year_month', how='outer')
+            series_frames.append(series)
             print(f"  Fetched {len(series)} months of {col_name}")
         except Exception as e:
             print(f"  Could not fetch {col_name}: {e}")
-    if merged is not None:
-        merged = merged.sort_values('year_month')
-        # Forward-fill for months where latest data isn't published yet
-        merged = merged.ffill()
+
+    try:
+        hpi = _fetch_eurostat_belgian_hpi()
+        series_frames.append(hpi)
+        print(f"  Fetched {len(hpi)} months of Eurostat Belgian HPI")
+    except Exception as e:
+        print(f"  Could not fetch Eurostat HPI: {e}")
+
+    if not series_frames:
+        return None
+
+    merged = series_frames[0]
+    for frame in series_frames[1:]:
+        merged = merged.merge(frame, on='year_month', how='outer')
+
+    merged = merged.sort_values('year_month').ffill().bfill()
+    if {'be_mortgage_rate_avg', 'belgian_cpi_yoy_pct'}.issubset(merged.columns):
+        merged['real_mortgage_rate'] = merged['be_mortgage_rate_avg'] - merged['belgian_cpi_yoy_pct']
+    if {'belgian_10y_yield', 'euribor_3m'}.issubset(merged.columns):
+        merged['yield_curve_slope'] = merged['belgian_10y_yield'] - merged['euribor_3m']
     return merged
 
 
