@@ -427,7 +427,10 @@ def stage_mps():
         _save_lckpt(ckpt)
         print(f"  [{name:24s}] fitted in {time.perf_counter()-ts:.1f}s", flush=True)
 
-    # TabICLv2 (price & psqm)
+    # TabICLv2 (price & psqm) — chunk Xva in 400-row slices + gc to stay well under MPS memory cap on full 14,599 train rows
+    import gc
+    gc.collect()
+    torch.mps.empty_cache()
     for tmode in ('log_real_price', 'log_real_psqm'):
         short = 'price' if tmode == 'log_real_price' else 'psqm'
         n_mn, n_md = f'p6_tabicl_{short}_mean', f'p6_tabicl_{short}_med'
@@ -436,12 +439,19 @@ def stage_mps():
         ts = time.perf_counter()
         Xtr, Xva = _prep_fm(sp['tr_df'], sp['va_df'], fm_feats, max_cat=30, num_cats=False)
         yt = _target_fwd(y_tr, a_tr, tr_def, tmode).astype(np.float32)
-        reg = TabICLRegressor(device='mps', n_estimators=8, batch_size=1, use_amp=True, random_state=42)
+        reg = TabICLRegressor(device='mps', n_estimators=8, batch_size=1, use_amp=True, offload_mode='auto', random_state=42)
         reg.fit(Xtr, yt)
-        out = reg.predict(Xva, output_type=['mean', 'median'])
+        mn_chunks, md_chunks = [], []
+        for st in range(0, len(Xva), 400):
+            out = reg.predict(Xva.iloc[st:st + 400], output_type=['mean', 'median'])
+            mn_chunks.append(np.asarray(out['mean'], dtype=np.float64))
+            md_chunks.append(np.asarray(out['median'], dtype=np.float64))
+            torch.mps.empty_cache()
+        del reg
+        gc.collect()
         torch.mps.empty_cache()
-        ckpt[n_mn] = _target_inv(out['mean'], a_fr, va_def, tmode)
-        ckpt[n_md] = _target_inv(out['median'], a_fr, va_def, tmode)
+        ckpt[n_mn] = _target_inv(np.concatenate(mn_chunks), a_fr, va_def, tmode)
+        ckpt[n_md] = _target_inv(np.concatenate(md_chunks), a_fr, va_def, tmode)
         _save_lckpt(ckpt)
         print(f"  [{n_mn:24s}] fitted in {time.perf_counter()-ts:.1f}s", flush=True)
 
@@ -484,8 +494,17 @@ def stage_eval():
     L_mat = np.column_stack([np.log(np.clip(ckpt[n], 10_000, 1e7)) for n in names])
     p6_pred = np.clip(np.exp(L_mat @ w_uni), 10_000, 1e7)
 
+    # Also fit P6-HUBER meta-recalibrator strictly on Phase-6 OOF (zero tuning on live!)
+    from sklearn.linear_model import HuberRegressor
+    O_log_tr = p6_z['O_log']
+    y_tr_oof = p6_z['y_oof']
+    nm_tr = (y_tr_oof >= 150_000) & (y_tr_oof <= 800_000)
+    hub = HuberRegressor(alpha=15.0, max_iter=500).fit(O_log_tr[nm_tr], np.log(y_tr_oof[nm_tr]))
+    p6_huber_pred = np.clip(np.exp(hub.predict(L_mat)), 10_000, 1e7)
+
     meta = b['fresh_meta'].copy()
     meta['p6_pred'] = p6_pred
+    meta['p6_huber_pred'] = p6_huber_pred
     meta['p6_err_pct'] = (p6_pred / b['y_fr'] - 1.0) * 100.0
     meta['p6_ape'] = np.abs(meta['p6_err_pct'])
     meta.to_csv(LIVE_CSV, index=False)
@@ -547,15 +566,16 @@ def stage_eval():
         if mask.sum() == 0:
             continue
         m6 = compute_metrics(y[mask], p6_pred[mask])
+        m6h = compute_metrics(y[mask], p6_huber_pred[mask])
         p4_col = next((c for c in ('pred_phase4_ens_eur', 'p4_ens_pred', 'pred_phase4') if c in meta.columns), None)
         p1_col = next((c for c in ('pred_phase1_base_eur', 'p1_lgbm_pred', 'pred_phase1') if c in meta.columns), None)
         m4 = compute_metrics(y[mask], meta[p4_col].to_numpy(float)[mask]) if p4_col else None
         m1 = compute_metrics(y[mask], meta[p1_col].to_numpy(float)[mask]) if p1_col else None
-        rep[label] = {'n': int(mask.sum()), 'phase6': m6, 'phase4': m4, 'phase1': m1}
+        rep[label] = {'n': int(mask.sum()), 'phase6_unified': m6, 'phase6_huber': m6h, 'phase4': m4, 'phase1': m1}
         s4 = f" | P4={m4['mdape']:5.2f}% (MAE €{m4['mae']:6,.0f})" if m4 else ""
         s1 = f" | P1={m1['mdape']:5.2f}%" if m1 else ""
         print(
-            f"  {label:34s} (n={mask.sum():4d}) | P6={m6['mdape']:5.2f}% Hit10={m6['hit_10']:4.1f}% Hit15={m6['hit_15']:4.1f}% "
+            f"  {label:34s} (n={mask.sum():4d}) | P6={m6['mdape']:5.2f}% (Hub={m6h['mdape']:5.2f}%) Hit10={m6['hit_10']:4.1f}% Hit15={m6['hit_15']:4.1f}% "
             f"MAE €{m6['mae']:6,.0f} R2={m6['r2']:.3f} bias={m6['bias_pct']:+5.2f}%{s4}{s1}",
             flush=True,
         )
