@@ -427,7 +427,7 @@ def stage_mps():
         _save_lckpt(ckpt)
         print(f"  [{name:24s}] fitted in {time.perf_counter()-ts:.1f}s", flush=True)
 
-    # TabICLv2 (price & psqm) — chunk Xva in 400-row slices + gc to stay well under MPS memory cap on full 14,599 train rows
+    # TabICLv2 (price & psqm) — bag 2 x 11,200-row subsamples (same context size as CV folds -> safe <2 GiB MPS!)
     import gc
     gc.collect()
     torch.mps.empty_cache()
@@ -439,21 +439,21 @@ def stage_mps():
         ts = time.perf_counter()
         Xtr, Xva = _prep_fm(sp['tr_df'], sp['va_df'], fm_feats, max_cat=30, num_cats=False)
         yt = _target_fwd(y_tr, a_tr, tr_def, tmode).astype(np.float32)
-        reg = TabICLRegressor(device='mps', n_estimators=8, batch_size=1, use_amp=True, offload_mode='auto', random_state=42)
-        reg.fit(Xtr, yt)
-        mn_chunks, md_chunks = [], []
-        for st in range(0, len(Xva), 400):
-            out = reg.predict(Xva.iloc[st:st + 400], output_type=['mean', 'median'])
-            mn_chunks.append(np.asarray(out['mean'], dtype=np.float64))
-            md_chunks.append(np.asarray(out['median'], dtype=np.float64))
+        bag_mn, bag_md = [], []
+        for bag_s in range(2):
+            idx_sub = np.random.default_rng(42 + bag_s * 17).choice(len(Xtr), size=min(11_200, len(Xtr)), replace=False)
+            reg = TabICLRegressor(device='mps', n_estimators=6, batch_size=1, use_amp=True, random_state=42 + bag_s)
+            reg.fit(Xtr.iloc[idx_sub].reset_index(drop=True), yt[idx_sub])
+            out = reg.predict(Xva, output_type=['mean', 'median'])
+            bag_mn.append(np.asarray(out['mean'], dtype=np.float64))
+            bag_md.append(np.asarray(out['median'], dtype=np.float64))
+            del reg
+            gc.collect()
             torch.mps.empty_cache()
-        del reg
-        gc.collect()
-        torch.mps.empty_cache()
-        ckpt[n_mn] = _target_inv(np.concatenate(mn_chunks), a_fr, va_def, tmode)
-        ckpt[n_md] = _target_inv(np.concatenate(md_chunks), a_fr, va_def, tmode)
+        ckpt[n_mn] = _target_inv(np.mean(bag_mn, axis=0), a_fr, va_def, tmode)
+        ckpt[n_md] = _target_inv(np.mean(bag_md, axis=0), a_fr, va_def, tmode)
         _save_lckpt(ckpt)
-        print(f"  [{n_mn:24s}] fitted in {time.perf_counter()-ts:.1f}s", flush=True)
+        print(f"  [{n_mn:24s}] fitted (2x11.2k bags) in {time.perf_counter()-ts:.1f}s", flush=True)
 
     # TabPFN V2 (price & psqm)
     for tmode in ('log_real_price', 'log_real_psqm'):
