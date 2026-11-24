@@ -312,6 +312,9 @@ def stage_stack():
                 t = np.asarray(ck[f'tmp__{nm_m}'], dtype=np.float64)
                 if not (np.all(np.isfinite(o)) and np.all(np.isfinite(t)) and np.all(o > 0) and np.all(t > 0)):
                     continue
+                if float(np.median(np.abs(o[nm] - y[nm]) / y[nm]) * 100.0) > 12.0:
+                    print(f"  [filter] Dropping diverged model: {nm_m}", flush=True)
+                    continue
                 seen.add(nm_m); names.append(nm_m); oofs.append(np.log(o)); tmps.append(np.log(t))
         return names, np.column_stack(oofs), np.column_stack(tmps)
 
@@ -435,6 +438,69 @@ def stage_stack():
         if w > 0:
             print(f"    {n:28s}: {w*100:5.1f}%", flush=True)
 
+    # Heteroscedastic Conformal 80% intervals on P7-HUBER Champion!
+    ens_std_oof = np.std(p7_O, axis=1)
+    ens_std_tmp = np.std(p7_T, axis=1)
+    ticl_hw_o = c_p7m.get('oof__p7_tabicl_hw', np.full(len(y), 0.14))
+    ticl_hw_t = c_p7m.get('tmp__p7_tabicl_hw', np.full(len(y_tmp), 0.14))
+    abs_err_oof = np.abs(np.log(y) - np.log(p7h_oof))
+    abs_err_tmp = np.abs(np.log(y_tmp) - np.log(p7h_tmp))
+
+    # Context features for sigma_hat(x)
+    df_raw = pd.read_parquet(os.path.join(BASE_DIR, 'outputs', 'dataset', 'training_dataset.parquet'))
+    ctx_cols = ['livable_area', 'property_type_HOUSE', 'is_newly_built', 'age', 'dist_from_center']
+    X_ctx = pd.DataFrame(index=range(len(y)))
+    for cc in ctx_cols:
+        if cc in df_raw.columns:
+            X_ctx[cc] = pd.to_numeric(df_raw[cc], errors='coerce').fillna(0.0).to_numpy(np.float32)
+    X_ctx['is_fixer'] = df_raw['building_condition'].isin(['TO_RENOVATE', 'TO_RESTORE', 'TO_BE_DONE_UP']).astype(np.float32).to_numpy()
+    X_ctx['ens_log_pred'] = np.log(p7h_oof).astype(np.float32)
+    X_ctx['ens_std'] = ens_std_oof.astype(np.float32)
+    X_ctx['tabicl_hw'] = np.asarray(ticl_hw_o, dtype=np.float32)
+
+    X_ctx_tmp = X_ctx.iloc[tmp_idx].copy()
+    X_ctx_tmp['ens_log_pred'] = np.log(p7h_tmp).astype(np.float32)
+    X_ctx_tmp['ens_std'] = ens_std_tmp.astype(np.float32)
+    X_ctx_tmp['tabicl_hw'] = np.asarray(ticl_hw_t, dtype=np.float32)
+
+    sig_oof = np.zeros(len(y), dtype=np.float64)
+    q_het_oof = np.zeros(len(y), dtype=np.float64)
+    q_hom_oof = np.zeros(len(y), dtype=np.float64)
+    for fk in range(5):
+        tr = (folds != fk) & nm; va = (folds == fk)
+        q_hom_oof[va] = float(np.quantile(abs_err_oof[tr], 0.80))
+        sm = lgb.LGBMRegressor(objective='mae', n_estimators=200, learning_rate=0.03, max_depth=3,
+                               num_leaves=7, min_child_samples=80, reg_lambda=20.0, random_state=42, verbose=-1)
+        sm.fit(X_ctx.iloc[tr], abs_err_oof[tr])
+        s_tr = np.clip(sm.predict(X_ctx.iloc[tr]), 0.03, 0.50)
+        s_va = np.clip(sm.predict(X_ctx.iloc[va]), 0.03, 0.50)
+        q_r = float(np.quantile(abs_err_oof[tr] / s_tr, 0.80))
+        sig_oof[va] = s_va; q_het_oof[va] = q_r * s_va
+
+    sm_f = lgb.LGBMRegressor(objective='mae', n_estimators=200, learning_rate=0.03, max_depth=3,
+                             num_leaves=7, min_child_samples=80, reg_lambda=20.0, random_state=42, verbose=-1)
+    sm_f.fit(X_ctx.iloc[nm], abs_err_oof[nm])
+    s_tr_f = np.clip(sm_f.predict(X_ctx.iloc[nm]), 0.03, 0.50)
+    s_tmp = np.clip(sm_f.predict(X_ctx_tmp), 0.03, 0.50)
+    q_hom_tmp = float(np.quantile(abs_err_oof[nm], 0.80))
+    q_het_tmp = float(np.quantile(abs_err_oof[nm] / s_tr_f, 0.80)) * s_tmp
+
+    cov_hom_o = float(np.mean(abs_err_oof[nm] <= q_hom_oof[nm]) * 100.0)
+    cov_het_o = float(np.mean(abs_err_oof[nm] <= q_het_oof[nm]) * 100.0)
+    hw_hom_o = float(np.median(np.expm1(q_hom_oof[nm])) * 100.0)
+    hw_het_o = float(np.median(np.expm1(q_het_oof[nm])) * 100.0)
+    cov_het_t = float(np.mean(abs_err_tmp[nm_tmp] <= q_het_tmp[nm_tmp]) * 100.0)
+    hw_het_t = float(np.median(np.expm1(q_het_tmp[nm_tmp])) * 100.0)
+    print(f"\n  --- P7-HUBER CONFORMAL 80% INTERVALS (Normal Ghent Homes) ---", flush=True)
+    print(f"    Homoscedastic OOF : cov={cov_hom_o:.2f}% | median halfwidth=±{hw_hom_o:.2f}%", flush=True)
+    print(f"    Heteroscedastic OOF: cov={cov_het_o:.2f}% | median halfwidth=±{hw_het_o:.2f}% (Phase-6 was ±15.06%!)", flush=True)
+    print(f"    Heteroscedastic TMP: cov={cov_het_t:.2f}% | median halfwidth=±{hw_het_t:.2f}% (Phase-6 was ±14.96%!)", flush=True)
+    rep['conformal_80'] = {
+        'hom_oof_cov': cov_hom_o, 'hom_oof_hw_pct': hw_hom_o,
+        'het_oof_cov': cov_het_o, 'het_oof_hw_pct': hw_het_o,
+        'het_tmp_cov': cov_het_t, 'het_tmp_hw_pct': hw_het_t,
+    }
+
     # Save weights & predictions
     rep['p7_weights_unified'] = {n: float(w) for n, w in zip(p7_names, p7u_w)}
     rep['p7_p6_weights_unified'] = {n: float(w) for n, w in zip(all_names, gu_w)}
@@ -448,6 +514,7 @@ def stage_stack():
         p7u_oof=p7u_oof, p7u_tmp=p7u_tmp, p7h_oof=p7h_oof, p7h_tmp=p7h_tmp,
         gu_oof=gu_oof, gu_tmp=gu_tmp, gh_oof=gh_oof, gh_tmp=gh_tmp,
         gc8_oof=gc8_oof, gc8_tmp=gc8_tmp,
+        hw_het_oof=q_het_oof, hw_het_tmp=q_het_tmp,
     )
     with open(P7_REPORT_JSON, 'w') as f:
         json.dump(rep, f, indent=2)
