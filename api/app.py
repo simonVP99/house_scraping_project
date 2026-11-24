@@ -48,75 +48,28 @@ def create_app(loader=None, pred_service=None, listings_service=None):
     if pred_service is not None:
         prediction_service = pred_service
     elif prediction_service is None:
-        import os
-        from api.config import AUTOGLUON_PATH, PCA_PATH, IMPUTATION_MODELS_PATH, STREET_GRAPH_PATH, SHAP_MODEL_PATH
+        import sys
+        from api.config import PRODUCTION_BUNDLE_DIR, PROJECT_DIR
 
-        ag_predictor = None
-        e5_model = None
-        e5_tokenizer = None
-        e5_device = None
-        pca_model = None
-        imputation_models = None
-        shap_artifact = None
+        src_dir = os.path.join(PROJECT_DIR, "src")
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
 
-        # Try loading AutoGluon model
+        bundle = None
         try:
-            from autogluon.tabular import TabularPredictor
-            if os.path.exists(AUTOGLUON_PATH):
-                ag_predictor = TabularPredictor.load(AUTOGLUON_PATH)
-                print(f"AutoGluon model loaded from {AUTOGLUON_PATH}")
+            if os.path.exists(os.path.join(PRODUCTION_BUNDLE_DIR, "feature_pipeline.joblib")):
+                from production_pipeline import ProductionBundle
+                bundle = ProductionBundle.load(PRODUCTION_BUNDLE_DIR)
+                mv = bundle.metadata.get("model_version", "phase7-lean5")
+                print(f"Phase-7 production bundle loaded ({mv}) from {PRODUCTION_BUNDLE_DIR}")
+            else:
+                print(f"Production bundle not found at {PRODUCTION_BUNDLE_DIR}. Run: .venv-api/bin/python -u src/train_production.py")
         except Exception as e:
-            print(f"AutoGluon not available: {e}")
-
-        # Try loading E5 model + PCA for description embeddings
-        try:
-            import torch
-            from transformers import AutoTokenizer, AutoModel
-            import joblib
-            from api.config import E5_MODEL_NAME
-
-            if os.path.exists(PCA_PATH):
-                e5_device = (
-                    "cuda" if torch.cuda.is_available()
-                    else "mps" if torch.backends.mps.is_available()
-                    else "cpu"
-                )
-                e5_tokenizer = AutoTokenizer.from_pretrained(E5_MODEL_NAME)
-                e5_model = AutoModel.from_pretrained(E5_MODEL_NAME).to(e5_device)
-                pca_model = joblib.load(PCA_PATH)
-                print(f"E5 + PCA loaded ({e5_device})")
-        except Exception as e:
-            print(f"E5/PCA not available: {e}")
-
-        # Try loading imputation models (Poisson GLMs + median year_built)
-        try:
-            import joblib
-            if os.path.exists(IMPUTATION_MODELS_PATH):
-                imputation_models = joblib.load(IMPUTATION_MODELS_PATH)
-                n_models = len(imputation_models.get("poisson_models", {}))
-                print(f"Imputation models loaded ({n_models} Poisson GLMs, median_year_built={imputation_models.get('median_year_built')})")
-        except Exception as e:
-            print(f"Imputation models not available: {e}")
-
-        # Try loading SHAP XGBoost model
-        try:
-            import joblib
-            if os.path.exists(SHAP_MODEL_PATH):
-                shap_artifact = joblib.load(SHAP_MODEL_PATH)
-                print(f"SHAP XGBoost loaded ({len(shap_artifact['feature_names'])} features)")
-        except Exception as e:
-            print(f"SHAP model not available: {e}")
+            print(f"Production bundle failed to load: {e}")
 
         prediction_service = PredictionService(
-            ag_predictor=ag_predictor,
-            e5_model=e5_model,
-            e5_tokenizer=e5_tokenizer,
-            e5_device=e5_device,
-            pca_model=pca_model,
+            bundle=bundle,
             data_loader=data_loader,
-            imputation_models=imputation_models,
-            street_graph_path=STREET_GRAPH_PATH,
-            shap_artifact=shap_artifact,
         )
 
     if listings_service is not None:

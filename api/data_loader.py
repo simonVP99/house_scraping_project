@@ -1,6 +1,7 @@
 import os
 import json
 import math
+from datetime import datetime
 import pandas as pd
 import numpy as np
 from scipy.spatial import cKDTree
@@ -345,7 +346,7 @@ class DataLoader:
         # Compute how subject differs from comparable averages
         differentiators = []
         comp_avg_age = result_df["age"].mean() if "age" in result_df.columns else None
-        subject_age = prop.get("age") or ((2026 - prop["year_built"]) if prop.get("year_built") else None)
+        subject_age = prop.get("age") or ((datetime.now().year - prop["year_built"]) if prop.get("year_built") else None)
         if subject_age is not None and comp_avg_age is not None and not np.isnan(comp_avg_age):
             diff = subject_age - comp_avg_age
             if abs(diff) > 5:
@@ -515,7 +516,7 @@ class DataLoader:
             ("Livable Area (m\u00B2)", area, "livable_area"),
             ("Bedrooms", prop.get("number_of_bedrooms"), "number_of_bedrooms"),
             ("Age (years)", prop.get("age") or (
-                (2026 - prop["year_built"]) if prop.get("year_built") else None
+                (datetime.now().year - prop["year_built"]) if prop.get("year_built") else None
             ), "age"),
             ("Garden (m\u00B2)", prop.get("garden_surface"), "garden_surface"),
             ("Cadastral Income", prop.get("cadastral_income"), "cadastral_income"),
