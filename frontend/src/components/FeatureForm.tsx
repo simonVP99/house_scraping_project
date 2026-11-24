@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useId } from "react";
+import { useState, useMemo, useId } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { FEATURE_FIELDS } from "../types/prediction";
@@ -11,14 +11,16 @@ interface Props {
 }
 
 export default function FeatureForm({ formData, onRepredict, isPending }: Props) {
+  const [prevFormData, setPrevFormData] = useState(formData);
   const [values, setValues] = useState<Record<string, unknown>>({ ...formData });
   // All groups collapsed by default for progressive disclosure
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  // M4 fix: sync when formData changes (new prediction)
-  useEffect(() => {
+  // Sync draft values during render when a new prediction arrives (avoids set-state-in-effect)
+  if (formData !== prevFormData) {
+    setPrevFormData(formData);
     setValues({ ...formData });
-  }, [formData]);
+  }
 
   const groups = useMemo(() => {
     const map = new Map<string, FeatureFieldMeta[]>();

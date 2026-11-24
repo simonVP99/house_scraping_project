@@ -22,14 +22,25 @@ const BASELINE_KEYS = new Set([
 
 // Feature grouping for the grouped view
 const FEATURE_GROUPS: [string, Set<string>][] = [
-  ["Location", new Set(["neighbourhood", "postal_code", "dist_from_center", "distance_to_street", "street_type"])],
-  ["Type & size", new Set(["property_type_HOUSE", "property_subtype", "livable_area", "property_size", "facade_count", "street_facade_width", "total_floors", "floor_number"])],
+  ["Location & micro-geo", new Set([
+    "neighbourhood", "postal_code", "dist_from_center", "distance_to_street", "street_type",
+    "fl_mobiscore", "fl_mobiscore_x_area", "fl_heritage_count_150m", "fl_dist_navigable_water_m",
+    "fl_no2_2025_ugm3", "sector_median_income", "log_sector_income_x_area",
+    "sp_prior_price", "sp_log_prior_price", "sp_same_type_idw_psqm_k15", "sp_same_type_idw_psqm_k5",
+    "sp_idw_psqm_k15", "sp_type_wijk_psqm", "sp_type_sector_psqm", "te_street_log_psqm",
+  ])],
+  ["Type & size", new Set([
+    "property_type_HOUSE", "property_subtype", "livable_area", "property_size", "log_property_size_p1",
+    "facade_count", "street_facade_width", "total_floors", "floor_number",
+    "grb_bldg_footprint", "grb_parcel_area", "grb_log_parcel_area", "grb_open_plot_area",
+    "grb_implied_floors", "grb_adjoining_bldgs",
+  ])],
   ["Rooms", new Set(["number_of_bedrooms", "number_of_bathrooms", "number_of_toilets", "kitchen_surface", "living_room_surface", "shower_room_count"])],
-  ["Condition & age", new Set(["building_condition", "year_built", "age", "kitchen_type", "is_newly_built", "renovation_obligation"])],
-  ["Energy", new Set(["energy_label", "primary_energy_consumption", "heating_type", "has_heat_pump", "has_photovoltaic_panels", "has_double_glazing", "has_thermic_panels"])],
-  ["Outdoor", new Set(["has_garden", "garden_surface", "has_terrace", "terrace_surface", "has_swimming_pool"])],
-  ["Parking & amenities", new Set(["parking_indoor", "parking_outdoor", "has_lift", "has_basement", "has_attic", "monthly_costs", "cadastral_income"])],
-  ["Description & macro", new Set(["_other"])],
+  ["Condition & age", new Set(["building_condition", "condition_ordinal", "condition_x_area", "age_x_condition", "year_built", "age", "kitchen_type", "is_newly_built", "renovation_obligation"])],
+  ["Energy", new Set(["energy_label", "epc_ordinal", "epc_ef_area_penalty", "primary_energy_consumption", "heating_type", "has_heat_pump", "has_photovoltaic_panels", "has_double_glazing", "has_thermic_panels"])],
+  ["Outdoor", new Set(["has_garden", "garden_surface", "has_terrace", "terrace_surface", "outdoor_surface_total", "log_outdoor_surface", "has_swimming_pool"])],
+  ["Parking & amenities", new Set(["parking_indoor", "parking_outdoor", "total_parking", "has_lift", "has_basement", "has_attic", "monthly_costs", "cadastral_income", "log_cadastral_income", "ki_per_sqm"])],
+  ["Description & photos", new Set(["_other", "txt_tab_plus_text_psqm", "txt_blend_psqm", "txt_super_tabresid", "txt_e5l_a5_price", "txt_tfidf_a2_price", "vis_blend_psqm", "vis_blend_tabtxt_resid"])],
 ];
 
 interface Props {

@@ -17,6 +17,9 @@ export interface LiveListing {
   url: string;
   asking_price: number;
   predicted_price: number;
+  low_eur?: number | null;
+  high_eur?: number | null;
+  interval_halfwidth_pct?: number | null;
   delta_eur: number;
   delta_pct: number;
   livable_area: number | null;

@@ -11,6 +11,15 @@ interface Props {
 export default function PredictionResultCard({ data }: Props) {
   const { property, prediction } = data;
   const isUnderpriced = prediction.delta_eur != null && prediction.delta_eur > 0;
+  const hasBand = prediction.low_eur != null && prediction.high_eur != null;
+  const bandLabel =
+    prediction.band_position === "below_band"
+      ? "Asking below 80% range"
+      : prediction.band_position === "above_band"
+        ? "Asking above 80% range"
+        : prediction.band_position === "inside_band"
+          ? "Asking within 80% range"
+          : null;
 
   return (
     <div className="stagger-children">
@@ -19,11 +28,38 @@ export default function PredictionResultCard({ data }: Props) {
         <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-6 items-start">
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-              Predicted value
+              Predicted fair value
             </p>
             <p className="font-display text-4xl md:text-5xl font-bold tracking-tight mt-2 tabular-nums">
               {"\u20AC"}{prediction.predicted_price.toLocaleString()}
             </p>
+            {hasBand && (
+              <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-muted-foreground tabular-nums">
+                <span>
+                  80% range:{" "}
+                  <strong className="text-foreground font-medium">
+                    {"\u20AC"}{prediction.low_eur!.toLocaleString()} {"\u2013"} {"\u20AC"}{prediction.high_eur!.toLocaleString()}
+                  </strong>
+                  {prediction.interval_halfwidth_pct != null && (
+                    <span> ({"\u00B1"}{prediction.interval_halfwidth_pct.toFixed(1)}%)</span>
+                  )}
+                </span>
+                {bandLabel && (
+                  <Badge
+                    variant="outline"
+                    className={`text-xs font-medium ${
+                      prediction.band_position === "below_band"
+                        ? "border-positive/30 text-positive bg-positive/5"
+                        : prediction.band_position === "above_band"
+                          ? "border-negative/30 text-negative bg-negative/5"
+                          : "border-border text-muted-foreground"
+                    }`}
+                  >
+                    {bandLabel}
+                  </Badge>
+                )}
+              </div>
+            )}
             {prediction.delta_eur != null && prediction.delta_pct != null && (
               <div className="flex flex-wrap items-center gap-3 mt-3">
                 <span
@@ -48,6 +84,14 @@ export default function PredictionResultCard({ data }: Props) {
                   vs asking {property.price ? `\u20AC${property.price.toLocaleString()}` : "N/A"}
                 </span>
               </div>
+            )}
+            {prediction.track && (
+              <p className="text-xs text-muted-foreground mt-2">
+                {prediction.has_photos
+                  ? "Multimodal estimate (tabular + text + photos)"
+                  : "Tabular + description estimate (no photo scoring)"}
+                {prediction.model_version ? ` \u00B7 ${prediction.model_version}` : ""}
+              </p>
             )}
           </div>
 

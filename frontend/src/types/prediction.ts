@@ -76,8 +76,19 @@ export interface PredictionResult {
   };
   prediction: {
     predicted_price: number;
+    predicted_eur?: number;
+    low_eur?: number;
+    high_eur?: number;
+    low_90_eur?: number;
+    high_90_eur?: number;
+    interval_halfwidth_pct?: number;
+    confidence_level?: number;
+    band_position?: "below_band" | "inside_band" | "above_band" | null;
     delta_eur: number | null;
     delta_pct: number | null;
+    track?: "tabular_text" | "multimodal" | string;
+    has_photos?: boolean;
+    model_version?: string;
   };
   form_data: Record<string, unknown>;
   comparables?: ComparablesData | null;
@@ -85,7 +96,7 @@ export interface PredictionResult {
   shap?: ShapData | null;
 }
 
-export interface ManualPredictionResult {
+export interface ManualPredictionResult extends Partial<PredictionResult> {
   predicted_price: number;
 }
 

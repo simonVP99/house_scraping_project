@@ -52,7 +52,21 @@ const columns: ColumnDef<LiveListing>[] = [
   {
     accessorKey: "predicted_price",
     header: "Predicted (€)",
-    cell: ({ getValue }) => fmtEur(getValue() as number),
+    cell: ({ row }) => {
+      const p = row.original.predicted_price;
+      const lo = row.original.low_eur;
+      const hi = row.original.high_eur;
+      return (
+        <div className="tabular-nums">
+          <div>{fmtEur(p)}</div>
+          {lo != null && hi != null && (
+            <div className="text-[11px] text-muted-foreground">
+              {fmtEur(lo)} {"\u2013"} {fmtEur(hi)}
+            </div>
+          )}
+        </div>
+      );
+    },
   },
   {
     accessorKey: "delta_pct",
