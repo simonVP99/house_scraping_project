@@ -154,13 +154,49 @@ def test_deals_endpoint_and_filters():
     res_all = svc.get_deals(available_only=True)
     assert [d["property_id"] for d in res_all["deals"]] == ["101"]
 
-    # Route test through Flask app
+    # Extra local filters: min_condition, min_area, min_bedrooms, has_garden, price_cut_only, search, include_archive
+    res_extra = svc.get_deals(
+        min_condition="GOOD",
+        min_area=120,
+        min_bedrooms=3,
+        price_cut_only=True,
+        search="veldstraat",
+        include_archive=True,
+    )
+    assert res_extra["source"] == "corpus_full"
+    assert [d["property_id"] for d in res_extra["deals"]] == ["101"]
+
+    # Route test through Flask app (incl max_predicted + extra filters + dossier + compare)
     app = create_app(loader=mock_loader, pred_service=MagicMock(), listings_service=svc)
     app.config["TESTING"] = True
-    resp = app.test_client().get("/api/deals?property_type=HOUSE&min_epc=C&below_band_only=true&available_only=true")
+    client = app.test_client()
+    resp = client.get(
+        "/api/deals?property_type=HOUSE&min_epc=C&min_condition=GOOD&min_area=100"
+        "&min_bedrooms=3&price_cut_only=true&below_band_only=true&available_only=true"
+        "&max_predicted=400000&search=Veldstraat"
+    )
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["source"] == "corpus_recent"
     assert len(body["deals"]) == 1
     assert body["deals"][0]["property_id"] == "101"
     assert body["deals"][0]["availability_status"] == "active_recent"
+
+    # max_predicted below 380k excludes 101
+    resp_none = client.get("/api/deals?max_predicted=350000")
+    assert resp_none.status_code == 200
+    assert len(resp_none.get_json()["deals"]) == 0
+
+    # Dossier & side-by-side compare endpoints
+    resp_dos = client.get("/api/properties/101/dossier")
+    assert resp_dos.status_code == 200
+    dos = resp_dos.get_json()
+    assert dos["property_id"] == "101"
+    assert dos["valuation"]["predicted_mm_eur"] == 380_000
+    assert dos["availability"]["status"] == "active_recent"
+
+    resp_cmp = client.post("/api/properties/compare", json={"property_ids": ["101", "102"]})
+    assert resp_cmp.status_code == 200
+    cmp_body = resp_cmp.get_json()
+    assert cmp_body["count"] == 2
+    assert [p["property_id"] for p in cmp_body["properties"]] == ["101", "102"]

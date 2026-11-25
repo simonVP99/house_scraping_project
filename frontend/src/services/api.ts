@@ -5,11 +5,13 @@ import type { EdaReport } from "../types/eda";
 import type {
   AffordabilityQuery,
   AffordabilityResponse,
+  ComparePropertiesResponse,
   DealsQuery,
   DealsResponse,
   LiveCheckResult,
   MarketInsights,
   ModelMetadata,
+  PropertyDossier,
 } from "../types/insights";
 
 const BASE = "/api";
@@ -86,7 +88,18 @@ export const api = {
     if (params?.neighbourhood && params.neighbourhood !== "ALL") qs.set("neighbourhood", params.neighbourhood);
     if (params?.property_type && params.property_type !== "ALL") qs.set("property_type", params.property_type);
     if (params?.max_price) qs.set("max_price", String(params.max_price));
+    if (params?.max_predicted) qs.set("max_predicted", String(params.max_predicted));
     if (params?.min_epc && params.min_epc !== "ANY") qs.set("min_epc", params.min_epc);
+    if (params?.min_condition && params.min_condition !== "ANY") qs.set("min_condition", params.min_condition);
+    if (params?.min_area && params.min_area > 0) qs.set("min_area", String(params.min_area));
+    if (params?.min_bedrooms && params.min_bedrooms > 0) qs.set("min_bedrooms", String(params.min_bedrooms));
+    if (params?.regime && params.regime !== "ALL") qs.set("regime", params.regime);
+    if (params?.has_garden) qs.set("has_garden", "true");
+    if (params?.has_terrace) qs.set("has_terrace", "true");
+    if (params?.price_cut_only) qs.set("price_cut_only", "true");
+    if (params?.min_jepa_dz != null) qs.set("min_jepa_dz", String(params.min_jepa_dz));
+    if (params?.search && params.search.trim()) qs.set("search", params.search.trim());
+    if (params?.include_archive) qs.set("include_archive", "true");
     if (params?.min_delta_pct != null) qs.set("min_delta_pct", String(params.min_delta_pct));
     if (params?.below_band_only) qs.set("below_band_only", "true");
     if (params?.available_only) qs.set("available_only", "true");
@@ -98,6 +111,16 @@ export const api = {
   checkDealLive: (propertyId: string) =>
     fetchJson<LiveCheckResult>(`${BASE}/deals/${encodeURIComponent(propertyId)}/check-live`, {
       method: "POST",
+    }),
+
+  getPropertyDossier: (propertyId: string) =>
+    fetchJson<PropertyDossier>(`${BASE}/properties/${encodeURIComponent(propertyId)}/dossier`),
+
+  compareProperties: (propertyIds: string[]) =>
+    fetchJson<ComparePropertiesResponse>(`${BASE}/properties/compare`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ property_ids: propertyIds }),
     }),
 
   getEdaReport: () => fetchJson<EdaReport>(`${BASE}/eda`),

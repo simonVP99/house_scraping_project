@@ -2,18 +2,17 @@ import { Fragment, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownUp,
-  Calendar,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
   ExternalLink,
-  Home,
-  MapPin,
-  Radio,
   RefreshCw,
+  RotateCcw,
+  Scale,
+  Search,
   SlidersHorizontal,
   Sparkles,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +27,8 @@ import { useDeals } from "../hooks/useInsights";
 import { useNeighbourhoods } from "../hooks/useNeighbourhoods";
 import { useRefreshListings } from "../hooks/useLiveListings";
 import { api } from "../services/api";
+import DealDossierPanel from "../components/DealDossierPanel";
+import CompareModal from "../components/CompareModal";
 import type { DealItem, DealsQuery, LiveCheckResult } from "../types/insights";
 import {
   formatCondition,
@@ -39,6 +40,8 @@ import {
 } from "../lib/format";
 
 type SortKey = "delta_pct" | "delta_eur" | "asking_price" | "predicted_price" | "livable_area" | "days_since_last_seen";
+
+const MAX_COMPARE = 4;
 
 function AvailabilityBadge({ deal }: { deal: DealItem }) {
   const status = deal.availability_status;
@@ -94,341 +97,21 @@ function AvailabilityBadge({ deal }: { deal: DealItem }) {
   );
 }
 
-function DealQuickOverview({
-  deal,
-  liveCheck,
-  checking,
-  onCheckLive,
-}: {
-  deal: DealItem;
-  liveCheck?: LiveCheckResult;
-  checking: boolean;
-  onCheckLive: () => void;
-}) {
-  const askPsm = deal.livable_area && deal.livable_area > 0 ? Math.round(deal.asking_price / deal.livable_area) : null;
-  const fairPsm = deal.livable_area && deal.livable_area > 0 ? Math.round(deal.predicted_price / deal.livable_area) : null;
-
-  const amenities = [
-    deal.has_garden
-      ? deal.garden_surface && deal.garden_surface > 0
-        ? `Garden (${Math.round(deal.garden_surface)} m²)`
-        : "Garden"
-      : null,
-    deal.has_terrace
-      ? deal.terrace_surface && deal.terrace_surface > 0
-        ? `Terrace (${Math.round(deal.terrace_surface)} m²)`
-        : "Terrace"
-      : null,
-    deal.has_photovoltaic_panels ? "Solar panels" : null,
-    deal.has_heat_pump ? "Heat pump" : null,
-    deal.has_lift ? "Elevator" : null,
-  ].filter(Boolean) as string[];
-
-  const regimeLabel =
-    deal.property_regime === "mixed_commercial"
-      ? "Mixed-Use / Store (Handelspand)"
-      : deal.property_regime === "multi_unit_investment"
-        ? "Multi-Unit / Opbrengsteigendom"
-        : deal.property_regime === "live_work"
-          ? "Live-Work / Practice (Praktijk)"
-          : deal.property_regime === "rented_yield"
-            ? "Currently Rented / Yield Pitch"
-            : deal.property_regime === "student_kot"
-              ? "Student Kot"
-              : deal.property_regime === "service_flat"
-                ? "Service Flat"
-                : null;
-
-  // Compact visual gauge coordinates for asking vs 80% conformal band
-  const spanMin = Math.min(deal.low_eur, deal.asking_price) * 0.94;
-  const spanMax = Math.max(deal.high_eur, deal.asking_price) * 1.06;
-  const toPct = (v: number) => Math.max(2, Math.min(98, ((v - spanMin) / Math.max(spanMax - spanMin, 1)) * 100));
-
-  return (
-    <div className="bg-muted/25 border-t border-border/70 px-5 py-4 space-y-4">
-      {/* Top row: Title, street address, availability & actions */}
-      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
-        <div className="space-y-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1 text-xs font-semibold text-foreground">
-              <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
-              {deal.address}
-            </span>
-            {deal.dist_from_center != null && (
-              <span className="text-[11px] text-muted-foreground tabular-nums">
-                · {deal.dist_from_center.toFixed(1)} km from Korenmarkt
-              </span>
-            )}
-            {deal.agency && (
-              <span className="text-[11px] text-muted-foreground">
-                · Agency: <strong className="text-foreground font-medium">{deal.agency}</strong>
-              </span>
-            )}
-          </div>
-          {deal.title && (
-            <p className="text-sm font-medium text-foreground leading-snug">{deal.title}</p>
-          )}
-          {deal.description_snippet && (
-            <p className="text-xs text-muted-foreground leading-relaxed max-w-4xl">
-              {deal.description_snippet}
-            </p>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onCheckLive}
-            disabled={checking}
-            className="h-8 text-xs"
-          >
-            <Radio className={`w-3.5 h-3.5 mr-1.5 ${checking ? "animate-pulse text-primary" : ""}`} />
-            {checking ? "Checking Immoweb..." : "Check Live Status"}
-          </Button>
-          <a
-            href={deal.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-          >
-            Open Immoweb #{deal.property_id}
-            <ExternalLink className="w-3 h-3" />
-          </a>
-        </div>
-      </div>
-
-      {/* Live check result banner (if user clicked Check Live Status) */}
-      {liveCheck && (
-        <div
-          className={`rounded-lg px-3.5 py-2 text-xs flex items-center justify-between gap-2 border ${
-            liveCheck.live_status === "online"
-              ? "bg-positive/10 border-positive/30 text-positive"
-              : liveCheck.live_status === "offline" || liveCheck.live_status === "sold_or_rented"
-                ? "bg-negative/10 border-negative/30 text-negative"
-                : "bg-warning/10 border-warning/30 text-warning"
-          }`}
-        >
-          <span className="inline-flex items-center gap-1.5 font-semibold">
-            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-            Live Immoweb check: {liveCheck.label}
-          </span>
-          <a href={liveCheck.url} target="_blank" rel="noopener noreferrer" className="underline font-medium">
-            Verify on page
-          </a>
-        </div>
-      )}
-
-      {/* 3-Column Quick Overview Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Column 1: Specs & Amenities */}
-        <div className="rounded-lg border border-border bg-card p-3.5 space-y-2 text-xs">
-          <div className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-[10px] text-muted-foreground">
-            <Home className="w-3 h-3 text-primary" />
-            Property Specs
-          </div>
-          <dl className="grid grid-cols-2 gap-y-1.5 gap-x-3 tabular-nums">
-            <dt className="text-muted-foreground">Type</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.property_subtype ? deal.property_subtype.replace(/_/g, " ") : deal.property_type}
-            </dd>
-            <dt className="text-muted-foreground">Livable / Plot</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.livable_area ? `${Math.round(deal.livable_area)} m²` : "—"}
-              {deal.property_size && deal.property_size > 0 ? ` / ${Math.round(deal.property_size)} m²` : ""}
-            </dd>
-            <dt className="text-muted-foreground">Beds / Baths</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.bedrooms != null ? Math.round(deal.bedrooms) : "—"} /{" "}
-              {deal.bathrooms != null ? Math.round(deal.bathrooms) : "—"}
-            </dd>
-            <dt className="text-muted-foreground">Condition / Year</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.condition ? formatCondition(deal.condition) : "—"}
-              {deal.year_built ? ` · ${Math.round(deal.year_built)}` : ""}
-            </dd>
-            <dt className="text-muted-foreground">EPC</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.energy_label ?? "—"}
-              {deal.primary_energy_consumption != null
-                ? ` (${Math.round(deal.primary_energy_consumption)} kWh/m²)`
-                : ""}
-            </dd>
-            {deal.cadastral_income != null && deal.cadastral_income > 0 && (
-              <>
-                <dt className="text-muted-foreground">Cadastral (KI)</dt>
-                <dd className="text-right font-medium text-foreground">€{Math.round(deal.cadastral_income)}</dd>
-              </>
-            )}
-          </dl>
-          {amenities.length > 0 && (
-            <div className="flex flex-wrap gap-1 pt-1 border-t border-border/60">
-              {amenities.map((a) => (
-                <span key={a} className="px-1.5 py-0.5 rounded bg-muted text-[10px] text-foreground">
-                  {a}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Column 2: Valuation & Photo Honesty */}
-        <div className="rounded-lg border border-border bg-card p-3.5 space-y-2.5 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold uppercase tracking-wider text-[10px] text-muted-foreground">
-              Phase-7 Valuation &amp; JEPA Signal
-            </span>
-            <span className={`font-bold tabular-nums ${deal.delta_pct >= 0 ? "text-positive" : "text-negative"}`}>
-              {formatPctSigned(deal.delta_pct)}
-            </span>
-          </div>
-
-          {/* Mini 80% conformal band bar */}
-          <div className="space-y-1 pt-0.5">
-            <div className="relative h-4 rounded-full bg-muted/70 overflow-hidden">
-              <div
-                className="absolute top-0 bottom-0 bg-primary/20 border-x border-primary/50"
-                style={{
-                  left: `${toPct(deal.low_eur)}%`,
-                  width: `${Math.max(4, toPct(deal.high_eur) - toPct(deal.low_eur))}%`,
-                }}
-              />
-              <div
-                title={`Phase-7 fair value: ${formatEur(deal.predicted_price)}`}
-                className="absolute top-0 bottom-0 w-0.5 bg-primary"
-                style={{ left: `${toPct(deal.predicted_price)}%` }}
-              />
-              <div
-                title={`Asking price: ${formatEur(deal.asking_price)}`}
-                className={`absolute top-1 bottom-1 w-2 -ml-1 rounded-full ${
-                  deal.delta_pct >= 0 ? "bg-positive" : "bg-negative"
-                }`}
-                style={{ left: `${toPct(deal.asking_price)}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-[10px] text-muted-foreground tabular-nums">
-              <span>80% low: {formatEurCompact(deal.low_eur)}</span>
-              <span>Fair: {formatEurCompact(deal.predicted_price)}</span>
-              <span>high: {formatEurCompact(deal.high_eur)}</span>
-            </div>
-          </div>
-
-          <dl className="grid grid-cols-2 gap-y-1 gap-x-3 tabular-nums pt-1 border-t border-border/60">
-            <dt className="text-muted-foreground">Ask vs Fair €/m²</dt>
-            <dd className="text-right font-medium text-foreground">
-              {askPsm ? formatPsm(askPsm) : "—"} → {fairPsm ? formatPsm(fairPsm) : "—"}
-            </dd>
-            {deal.vision_delta_pct != null && (
-              <>
-                <dt className="text-muted-foreground">Photo price shift</dt>
-                <dd
-                  className={`text-right font-medium ${
-                    deal.vision_delta_pct >= 2
-                      ? "text-positive"
-                      : deal.vision_delta_pct <= -2
-                        ? "text-negative"
-                        : "text-foreground"
-                  }`}
-                >
-                  {formatPctSigned(deal.vision_delta_pct)}
-                  {deal.vision_delta_eur != null ? ` (${formatEurSigned(deal.vision_delta_eur)})` : ""}
-                </dd>
-              </>
-            )}
-            {deal.jepa_dz_quality != null && (
-              <>
-                <dt className="text-muted-foreground">JEPA Visual Δz</dt>
-                <dd
-                  className={`text-right font-semibold ${
-                    deal.jepa_dz_quality >= 0.45
-                      ? "text-positive"
-                      : deal.jepa_dz_quality <= -0.55
-                        ? "text-negative"
-                        : "text-foreground"
-                  }`}
-                >
-                  {deal.jepa_dz_quality > 0 ? "+" : ""}{deal.jepa_dz_quality.toFixed(2)}σ
-                </dd>
-              </>
-            )}
-            {deal.jepa_energy_sym != null && (
-              <>
-                <dt className="text-muted-foreground">Contradiction Energy</dt>
-                <dd className="text-right font-medium text-foreground">{deal.jepa_energy_sym.toFixed(2)}</dd>
-              </>
-            )}
-          </dl>
-          {regimeLabel && (
-            <p className="text-[11px] rounded bg-warning/10 border border-warning/30 text-warning px-2 py-1 font-medium">
-              Regime note: {regimeLabel} (wider valuation spread than pure residential)
-            </p>
-          )}
-        </div>
-
-        {/* Column 3: Market History & Availability */}
-        <div className="rounded-lg border border-border bg-card p-3.5 space-y-2 text-xs">
-          <div className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-[10px] text-muted-foreground">
-            <Calendar className="w-3 h-3 text-primary" />
-            Availability &amp; Market History
-          </div>
-          <dl className="grid grid-cols-2 gap-y-1.5 gap-x-3 tabular-nums">
-            <dt className="text-muted-foreground">Status</dt>
-            <dd className="text-right">
-              <AvailabilityBadge deal={deal} />
-            </dd>
-            <dt className="text-muted-foreground">First seen</dt>
-            <dd className="text-right font-medium text-foreground">{deal.first_seen || deal.date_obtained || "—"}</dd>
-            <dt className="text-muted-foreground">Last seen</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.last_seen || deal.date_obtained || "—"}
-              {deal.days_since_last_seen != null && deal.days_since_last_seen <= 3 && (
-                <span className="text-positive ml-1">(latest)</span>
-              )}
-            </dd>
-            <dt className="text-muted-foreground">Days tracked</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.listing_duration_days != null ? `${Math.round(deal.listing_duration_days)}d` : "—"}
-              {deal.n_snapshots != null ? ` (${Math.round(deal.n_snapshots)} scrapes)` : ""}
-            </dd>
-            <dt className="text-muted-foreground">Price cut</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.had_price_cut ? (
-                <span className="text-warning font-semibold">
-                  Yes
-                  {deal.price_cut_eur && deal.price_cut_eur > 0
-                    ? ` (−${formatEurCompact(deal.price_cut_eur)})`
-                    : ""}
-                </span>
-              ) : (
-                "None observed"
-              )}
-            </dd>
-            <dt className="text-muted-foreground">Under option</dt>
-            <dd className="text-right font-medium text-foreground">
-              {deal.is_under_option ? <span className="text-warning font-semibold">Yes</span> : "No"}
-            </dd>
-          </dl>
-          <p className="text-[11px] text-muted-foreground pt-1 border-t border-border/60 leading-snug">
-            {deal.availability_status === "active_recent"
-              ? `Confirmed online in our latest scrape (${deal.latest_scrape_date ?? "recent"}).`
-              : deal.availability_status === "seen_recently"
-                ? `Seen within 14 days of our latest scrape (${deal.latest_scrape_date ?? "recent"}). Use "Check Live Status" to verify.`
-                : deal.availability_status === "under_option"
-                  ? "Seller marked this listing under option on the last scrape."
-                  : `Last observed ${deal.last_seen ?? "earlier"} — not present in the ${deal.latest_scrape_date ?? "latest"} scrape, so it may be sold or relisted.`}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function DealsPage() {
   const [neighbourhood, setNeighbourhood] = useState("ALL");
   const [propertyType, setPropertyType] = useState("ALL");
-  const [maxPrice, setMaxPrice] = useState<number>(650_000);
+  const [maxPredicted, setMaxPredicted] = useState<number>(650_000);
   const [minEpc, setMinEpc] = useState("ANY");
+  const [minCondition, setMinCondition] = useState("ANY");
+  const [minArea, setMinArea] = useState<number>(0);
+  const [minBedrooms, setMinBedrooms] = useState<number>(0);
+  const [regime, setRegime] = useState("ALL");
+  const [hasGarden, setHasGarden] = useState(false);
+  const [hasTerrace, setHasTerrace] = useState(false);
+  const [priceCutOnly, setPriceCutOnly] = useState(false);
+  const [goodPhotosOnly, setGoodPhotosOnly] = useState(false);
+  const [includeArchive, setIncludeArchive] = useState(false);
+  const [searchText, setSearchText] = useState("");
   const [minDelta, setMinDelta] = useState<number>(5);
   const [belowBandOnly, setBelowBandOnly] = useState(false);
   const [availableOnly, setAvailableOnly] = useState(false);
@@ -438,19 +121,73 @@ export default function DealsPage() {
   const [liveChecks, setLiveChecks] = useState<Record<string, LiveCheckResult>>({});
   const [checkingId, setCheckingId] = useState<string | null>(null);
 
+  // Side-by-side comparison tray (max 4 properties)
+  const [compareList, setCompareList] = useState<
+    { property_id: string; label: string; asking_price: number }[]
+  >([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+
   const queryParams: DealsQuery = useMemo(
     () => ({
       neighbourhood,
       property_type: propertyType,
-      max_price: maxPrice,
+      max_predicted: maxPredicted,
       min_epc: minEpc,
+      min_condition: minCondition,
+      min_area: minArea > 0 ? minArea : undefined,
+      min_bedrooms: minBedrooms > 0 ? minBedrooms : undefined,
+      regime,
+      has_garden: hasGarden,
+      has_terrace: hasTerrace,
+      price_cut_only: priceCutOnly,
+      min_jepa_dz: goodPhotosOnly ? 0.25 : undefined,
+      search: searchText.trim() || undefined,
+      include_archive: includeArchive,
       min_delta_pct: minDelta,
       below_band_only: belowBandOnly,
       available_only: availableOnly,
       limit: 200,
     }),
-    [neighbourhood, propertyType, maxPrice, minEpc, minDelta, belowBandOnly, availableOnly],
+    [
+      neighbourhood,
+      propertyType,
+      maxPredicted,
+      minEpc,
+      minCondition,
+      minArea,
+      minBedrooms,
+      regime,
+      hasGarden,
+      hasTerrace,
+      priceCutOnly,
+      goodPhotosOnly,
+      searchText,
+      includeArchive,
+      minDelta,
+      belowBandOnly,
+      availableOnly,
+    ],
   );
+
+  const resetFilters = () => {
+    setNeighbourhood("ALL");
+    setPropertyType("ALL");
+    setMaxPredicted(650_000);
+    setMinEpc("ANY");
+    setMinCondition("ANY");
+    setMinArea(0);
+    setMinBedrooms(0);
+    setRegime("ALL");
+    setHasGarden(false);
+    setHasTerrace(false);
+    setPriceCutOnly(false);
+    setGoodPhotosOnly(false);
+    setIncludeArchive(false);
+    setSearchText("");
+    setMinDelta(5);
+    setBelowBandOnly(false);
+    setAvailableOnly(false);
+  };
 
   const { data, isLoading, error } = useDeals(queryParams);
   const { data: neighbourhoods } = useNeighbourhoods();
@@ -475,6 +212,33 @@ export default function DealsPage() {
     () => deals.filter((d) => d.availability_status === "active_recent" || d.availability_status === "seen_recently").length,
     [deals],
   );
+
+  const comparedIds = useMemo(() => new Set(compareList.map((c) => c.property_id)), [compareList]);
+
+  const toggleCompare = (deal: DealItem) => {
+    setCompareList((prev) => {
+      if (prev.some((c) => c.property_id === deal.property_id)) {
+        return prev.filter((c) => c.property_id !== deal.property_id);
+      }
+      if (prev.length >= MAX_COMPARE) return prev;
+      return [
+        ...prev,
+        {
+          property_id: deal.property_id,
+          label: deal.neighbourhood || deal.address || `#${deal.property_id}`,
+          asking_price: deal.asking_price,
+        },
+      ];
+    });
+  };
+
+  const removeCompare = (pid: string) => {
+    setCompareList((prev) => {
+      const next = prev.filter((c) => c.property_id !== pid);
+      if (next.length === 0) setCompareOpen(false);
+      return next;
+    });
+  };
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDesc((d) => !d);
@@ -518,7 +282,7 @@ export default function DealsPage() {
   const isLive = data?.source === "live_scrape";
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-24 space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
@@ -529,7 +293,7 @@ export default function DealsPage() {
             Ghent Deal Hunter
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Click any listing to inspect its specs, photo honesty (JEPA Δz), market stay, and recent availability.
+            Click any house for its complete dossier (photos, specs, JEPA audit, Flanders environment &amp; history), or tick up to 4 to compare side by side.
           </p>
         </div>
 
@@ -544,7 +308,9 @@ export default function DealsPage() {
             >
               {isLive
                 ? `Live scrape · ${data.date_used}`
-                : `Latest scrape · ${data.date_used ?? "latest"}`}
+                : data.source === "corpus_full"
+                  ? `Full local corpus · through ${data.date_used ?? "latest"}`
+                  : `Local corpus (90d) · through ${data.date_used ?? "latest"}`}
             </span>
           )}
           <Button
@@ -577,9 +343,17 @@ export default function DealsPage() {
             <span className="px-2.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/25 font-semibold">
               {belowBandCount} below 80% fair band
             </span>
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" /> Reset
+            </button>
           </div>
         </div>
 
+        {/* Row 1: Core valuation & location filters */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
           <div>
             <label htmlFor="deal-nbh" className="block text-xs font-medium text-muted-foreground mb-1">
@@ -618,16 +392,16 @@ export default function DealsPage() {
 
           <div>
             <label htmlFor="deal-budget" className="block text-xs font-medium text-muted-foreground mb-1">
-              Max Ask ({formatEurCompact(maxPrice)})
+              Max Predicted ({formatEurCompact(maxPredicted)})
             </label>
             <input
               id="deal-budget"
               type="range"
               min={200_000}
-              max={900_000}
+              max={1_000_000}
               step={25_000}
-              value={maxPrice}
-              onChange={(e) => setMaxPrice(Number(e.target.value))}
+              value={maxPredicted}
+              onChange={(e) => setMaxPredicted(Number(e.target.value))}
               className="w-full accent-[var(--color-primary)] cursor-pointer mt-2"
             />
           </div>
@@ -651,6 +425,24 @@ export default function DealsPage() {
           </div>
 
           <div>
+            <label htmlFor="deal-cond" className="block text-xs font-medium text-muted-foreground mb-1">
+              Min Condition
+            </label>
+            <select
+              id="deal-cond"
+              value={minCondition}
+              onChange={(e) => setMinCondition(e.target.value)}
+              className={selectClass}
+            >
+              <option value="ANY">Any condition</option>
+              <option value="AS_NEW">As new only</option>
+              <option value="JUST_RENOVATED">Just renovated +</option>
+              <option value="GOOD">Good +</option>
+              <option value="TO_BE_DONE_UP">To refresh +</option>
+            </select>
+          </div>
+
+          <div>
             <label htmlFor="deal-delta" className="block text-xs font-medium text-muted-foreground mb-1">
               Min Discount ({minDelta >= 0 ? `+${minDelta}%` : `${minDelta}%`})
             </label>
@@ -667,27 +459,153 @@ export default function DealsPage() {
               <option value={15}>Deep discount ≥15%</option>
             </select>
           </div>
+        </div>
 
-          <div className="flex flex-col justify-center gap-1.5">
-            <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={availableOnly}
-                onChange={(e) => setAvailableOnly(e.target.checked)}
-                className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
-              />
-              <span>Recently active only</span>
+        {/* Row 2: Size, Bedrooms, Regime & Local Search */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end pt-3 border-t border-border/60">
+          <div>
+            <label htmlFor="deal-area" className="block text-xs font-medium text-muted-foreground mb-1">
+              Min Area
             </label>
-            <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={belowBandOnly}
-                onChange={(e) => setBelowBandOnly(e.target.checked)}
-                className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
-              />
-              <span>Below 80% fair band</span>
-            </label>
+            <select
+              id="deal-area"
+              value={minArea}
+              onChange={(e) => setMinArea(Number(e.target.value))}
+              className={selectClass}
+            >
+              <option value={0}>Any size</option>
+              <option value={80}>≥ 80 m²</option>
+              <option value={110}>≥ 110 m²</option>
+              <option value={140}>≥ 140 m²</option>
+              <option value={180}>≥ 180 m²</option>
+              <option value={220}>≥ 220 m²</option>
+            </select>
           </div>
+
+          <div>
+            <label htmlFor="deal-beds" className="block text-xs font-medium text-muted-foreground mb-1">
+              Min Bedrooms
+            </label>
+            <select
+              id="deal-beds"
+              value={minBedrooms}
+              onChange={(e) => setMinBedrooms(Number(e.target.value))}
+              className={selectClass}
+            >
+              <option value={0}>Any</option>
+              <option value={1}>1+ bed</option>
+              <option value={2}>2+ beds</option>
+              <option value={3}>3+ beds</option>
+              <option value={4}>4+ beds</option>
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="deal-regime" className="block text-xs font-medium text-muted-foreground mb-1">
+              Property Regime
+            </label>
+            <select
+              id="deal-regime"
+              value={regime}
+              onChange={(e) => setRegime(e.target.value)}
+              className={selectClass}
+            >
+              <option value="ALL">All regimes</option>
+              <option value="residential">Pure residential only</option>
+              <option value="mixed_commercial">Mixed-use / Store</option>
+              <option value="live_work">Live-work / Practice</option>
+              <option value="multi_unit_investment">Multi-unit / Investment</option>
+              <option value="rented_yield">Rented / Yield pitch</option>
+              <option value="non_standard">All non-standard</option>
+            </select>
+          </div>
+
+          <div className="sm:col-span-2 lg:col-span-3">
+            <label htmlFor="deal-search" className="block text-xs font-medium text-muted-foreground mb-1">
+              Search Local Corpus (street, agency, title, or Immoweb #ID)
+            </label>
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                id="deal-search"
+                type="text"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="e.g. Kortrijksesteenweg, Trevi, tuin, 21868762..."
+                className={`${selectClass} pl-8`}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Row 3: Quick Toggle Chips (all evaluated locally) */}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-2 border-t border-border/60 text-xs">
+          <label className="inline-flex items-center gap-1.5 font-medium text-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={availableOnly}
+              onChange={(e) => setAvailableOnly(e.target.checked)}
+              className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
+            />
+            <span>Recently active only</span>
+          </label>
+          <label className="inline-flex items-center gap-1.5 font-medium text-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={belowBandOnly}
+              onChange={(e) => setBelowBandOnly(e.target.checked)}
+              className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
+            />
+            <span>Below 80% fair band</span>
+          </label>
+          <label className="inline-flex items-center gap-1.5 font-medium text-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={hasGarden}
+              onChange={(e) => setHasGarden(e.target.checked)}
+              className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
+            />
+            <span>Garden</span>
+          </label>
+          <label className="inline-flex items-center gap-1.5 font-medium text-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={hasTerrace}
+              onChange={(e) => setHasTerrace(e.target.checked)}
+              className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
+            />
+            <span>Terrace</span>
+          </label>
+          <label className="inline-flex items-center gap-1.5 font-medium text-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={priceCutOnly}
+              onChange={(e) => setPriceCutOnly(e.target.checked)}
+              className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
+            />
+            <span>Price cut observed</span>
+          </label>
+          <label className="inline-flex items-center gap-1.5 font-medium text-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={goodPhotosOnly}
+              onChange={(e) => setGoodPhotosOnly(e.target.checked)}
+              className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
+            />
+            <span>JEPA Photos +Δz (≥+0.25σ)</span>
+          </label>
+          <label
+            title="Search across all 13,439 normal Ghent homes in our local corpus (2024–2026) — even older/offline listings — for benchmarking & comparison"
+            className="inline-flex items-center gap-1.5 font-medium text-primary cursor-pointer select-none ml-auto"
+          >
+            <input
+              type="checkbox"
+              checked={includeArchive}
+              onChange={(e) => setIncludeArchive(e.target.checked)}
+              className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5"
+            />
+            <span>Include full local archive (13.4k homes)</span>
+          </label>
         </div>
       </div>
 
@@ -710,7 +628,7 @@ export default function DealsPage() {
             <Sparkles className="w-6 h-6 text-muted-foreground mx-auto" />
             <p className="text-sm font-medium text-foreground">No listings match these filters</p>
             <p className="text-xs text-muted-foreground">
-              Try relaxing the minimum discount, EPC threshold, or unchecking &ldquo;Recently active only&rdquo;.
+              Try raising Max Predicted, relaxing the minimum discount / EPC threshold, or unchecking &ldquo;Recently active only&rdquo;.
             </p>
           </div>
         ) : (
@@ -718,7 +636,10 @@ export default function DealsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/40">
-                  <TableHead className="w-8" />
+                  <TableHead className="w-10 text-center" title="Select up to 4 homes to compare side by side">
+                    <Scale className="w-3.5 h-3.5 mx-auto text-muted-foreground" />
+                  </TableHead>
+                  <TableHead className="w-7" />
                   <TableHead>Property</TableHead>
                   <TableHead>
                     <button type="button" onClick={() => handleSort("days_since_last_seen")} className="inline-flex items-center gap-1 hover:text-foreground cursor-pointer">
@@ -752,6 +673,8 @@ export default function DealsPage() {
                 {deals.map((d: DealItem) => {
                   const rowKey = `${d.property_id}-${d.date_obtained ?? ""}`;
                   const isExpanded = expandedId === rowKey;
+                  const isCompared = comparedIds.has(d.property_id);
+                  const canAddCompare = compareList.length < MAX_COMPARE;
                   const psm =
                     d.livable_area && d.livable_area > 0
                       ? Math.round(d.asking_price / d.livable_area)
@@ -763,10 +686,36 @@ export default function DealsPage() {
                         onClick={() => setExpandedId(isExpanded ? null : rowKey)}
                         aria-expanded={isExpanded}
                         className={`cursor-pointer transition-colors ${
-                          isExpanded ? "bg-primary/5 hover:bg-primary/8" : "hover:bg-muted/35"
+                          isExpanded
+                            ? "bg-primary/6 hover:bg-primary/8"
+                            : isCompared
+                              ? "bg-positive/5 hover:bg-positive/8"
+                              : "hover:bg-muted/35"
                         }`}
                       >
-                        <TableCell className="pr-0 text-muted-foreground">
+                        <TableCell
+                          className="text-center pr-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isCompared}
+                            disabled={!isCompared && !canAddCompare}
+                            onChange={() => toggleCompare(d)}
+                            aria-label={`Select ${d.address} for comparison`}
+                            title={
+                              isCompared
+                                ? "Remove from comparison"
+                                : canAddCompare
+                                  ? "Add to side-by-side comparison"
+                                  : "Maximum 4 properties selected"
+                            }
+                            className="rounded border-input accent-[var(--color-primary)] w-3.5 h-3.5 cursor-pointer disabled:opacity-40"
+                          />
+                        </TableCell>
+                        <TableCell className="px-1 text-muted-foreground">
                           {isExpanded ? (
                             <ChevronDown className="w-4 h-4 text-primary" />
                           ) : (
@@ -868,12 +817,15 @@ export default function DealsPage() {
                       </TableRow>
                       {isExpanded && (
                         <TableRow className="hover:bg-transparent">
-                          <TableCell colSpan={8} className="p-0">
-                            <DealQuickOverview
+                          <TableCell colSpan={9} className="p-0">
+                            <DealDossierPanel
                               deal={d}
                               liveCheck={liveChecks[d.property_id]}
                               checking={checkingId === d.property_id}
+                              isCompared={isCompared}
+                              canAddCompare={canAddCompare}
                               onCheckLive={() => handleCheckLive(d.property_id)}
+                              onToggleCompare={() => toggleCompare(d)}
                             />
                           </TableCell>
                         </TableRow>
@@ -886,6 +838,73 @@ export default function DealsPage() {
           </div>
         )}
       </div>
+
+      {/* Floating Side-by-Side Comparison Dock */}
+      {compareList.length > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[min(94vw,56rem)] rounded-2xl border border-primary/30 bg-card/95 backdrop-blur shadow-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
+              <Scale className="w-4 h-4" />
+              Compare ({compareList.length}/{MAX_COMPARE})
+            </span>
+            {compareList.map((c) => (
+              <span
+                key={c.property_id}
+                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-muted border border-border text-foreground max-w-[190px]"
+              >
+                <span className="truncate">{c.label}</span>
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  {formatEurCompact(c.asking_price)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeCompare(c.property_id)}
+                  className="text-muted-foreground hover:text-foreground cursor-pointer"
+                  aria-label={`Remove ${c.label}`}
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setCompareList([]);
+                setCompareOpen(false);
+              }}
+            >
+              Clear
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={compareList.length < 2}
+              onClick={() => setCompareOpen(true)}
+            >
+              <Scale className="w-3.5 h-3.5 mr-1.5" />
+              {compareList.length < 2 ? "Pick 1 more to compare" : `Compare ${compareList.length} Homes`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Side-by-Side Comparison Modal */}
+      {compareOpen && compareList.length > 0 && (
+        <CompareModal
+          propertyIds={compareList.map((c) => c.property_id)}
+          onRemove={removeCompare}
+          onClear={() => {
+            setCompareList([]);
+            setCompareOpen(false);
+          }}
+          onClose={() => setCompareOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -2,9 +2,10 @@ import json
 import os
 
 import pandas as pd
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from api.data_loader import DataLoader
+from api.dossier import PropertyDossierService
 from api.prediction import PredictionService
 from api.live_listings import LiveListingsService
 
@@ -48,10 +49,11 @@ def _load_eda_report():
 data_loader = None
 prediction_service = None
 live_listings_service = None
+dossier_service = None
 
 
 def create_app(loader=None, pred_service=None, listings_service=None):
-    global data_loader, prediction_service, live_listings_service
+    global data_loader, prediction_service, live_listings_service, dossier_service
     app = Flask(__name__)
     CORS(app, origins=["http://localhost:5173", "https://*.trycloudflare.com"])
 
@@ -94,6 +96,8 @@ def create_app(loader=None, pred_service=None, listings_service=None):
             live_listings_service = LiveListingsService(prediction_service, data_loader)
         except Exception as e:
             print(f"Live listings not available: {e}")
+
+    dossier_service = PropertyDossierService(data_loader=data_loader, prediction_service=prediction_service)
 
     @app.route("/api/health")
     def health():
@@ -233,20 +237,41 @@ def create_app(loader=None, pred_service=None, listings_service=None):
 
     @app.route("/api/deals")
     def deals_feed():
-        """City-wide Deal Hunter feed (live scraped listings when fresh, else recent Phase-7 OOF)."""
+        """City-wide Deal Hunter feed (all local scraped/OOF data — zero Immoweb calls)."""
         if live_listings_service is None:
             return jsonify({"deals": [], "total": 0, "source": "unavailable", "date_used": None}), 503
-        max_price_raw = request.args.get("max_price")
-        min_delta_raw = request.args.get("min_delta_pct")
+
+        def _f(name: str):
+            raw = request.args.get(name)
+            try:
+                return float(raw) if raw not in (None, "") else None
+            except ValueError:
+                return None
+
+        def _b(name: str) -> bool:
+            return request.args.get(name, "").lower() in ("1", "true", "yes")
+
+        min_beds_raw = request.args.get("min_bedrooms")
         limit_raw = request.args.get("limit", "150")
         payload = live_listings_service.get_deals(
             neighbourhood=request.args.get("neighbourhood"),
             property_type=request.args.get("property_type"),
-            max_price=float(max_price_raw) if max_price_raw else None,
+            max_price=_f("max_price"),
+            max_predicted=_f("max_predicted"),
             min_epc=request.args.get("min_epc"),
-            min_delta_pct=float(min_delta_raw) if min_delta_raw else None,
-            below_band_only=request.args.get("below_band_only", "").lower() in ("1", "true", "yes"),
-            available_only=request.args.get("available_only", "").lower() in ("1", "true", "yes"),
+            min_condition=request.args.get("min_condition"),
+            min_area=_f("min_area"),
+            min_bedrooms=int(min_beds_raw) if (min_beds_raw and min_beds_raw.isdigit()) else None,
+            regime=request.args.get("regime"),
+            has_garden=_b("has_garden"),
+            has_terrace=_b("has_terrace"),
+            price_cut_only=_b("price_cut_only"),
+            min_jepa_dz=_f("min_jepa_dz"),
+            search=request.args.get("search"),
+            include_archive=_b("include_archive"),
+            min_delta_pct=_f("min_delta_pct"),
+            below_band_only=_b("below_band_only"),
+            available_only=_b("available_only"),
             limit=int(limit_raw) if limit_raw.isdigit() else 150,
         )
         return jsonify(payload)
@@ -293,6 +318,45 @@ def create_app(loader=None, pred_service=None, listings_service=None):
             return jsonify({"property_id": pid, "live_status": "error", "label": f"HTTP {e.code}", "url": url})
         except Exception:
             return jsonify({"property_id": pid, "live_status": "error", "label": "Check timed out — Open Link", "url": url})
+
+    # ---- Full Property Dossier, Photos & Side-by-Side Comparison ---------
+    @app.route("/api/properties/<property_id>/dossier")
+    def property_dossier(property_id: str):
+        if dossier_service is None:
+            return jsonify({"error": "Dossier service unavailable"}), 503
+        dossier = dossier_service.get_dossier(property_id)
+        if dossier is None:
+            return jsonify({"error": f"Property {property_id} not found"}), 404
+        return jsonify(dossier)
+
+    @app.route("/api/properties/<property_id>/photos/<filename>")
+    def property_photo(property_id: str, filename: str):
+        if dossier_service is None:
+            return jsonify({"error": "Dossier service unavailable"}), 503
+        path = dossier_service.get_photo_path(property_id, filename)
+        if path is None:
+            return jsonify({"error": "Photo not found"}), 404
+        return send_file(path, max_age=86400)
+
+    @app.route("/api/properties/compare", methods=["POST"])
+    def compare_properties():
+        if dossier_service is None:
+            return jsonify({"error": "Dossier service unavailable"}), 503
+        body = request.get_json(silent=True) or {}
+        ids = body.get("property_ids") or []
+        if not isinstance(ids, list) or len(ids) == 0:
+            return jsonify({"error": "Provide property_ids (1 to 4 IDs)"}), 400
+        seen = []
+        for raw_id in ids[:4]:
+            pid = "".join(ch for ch in str(raw_id) if ch.isdigit())
+            if pid and pid not in seen:
+                seen.append(pid)
+        items = []
+        for pid in seen:
+            d = dossier_service.get_dossier(pid)
+            if d is not None:
+                items.append(d)
+        return jsonify({"properties": items, "count": len(items)})
 
     # ---- Model Metadata & Market Insights --------------------------------
     @app.route("/api/model/metadata")

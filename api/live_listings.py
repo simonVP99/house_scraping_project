@@ -207,18 +207,39 @@ class LiveListingsService:
         neighbourhood: str | None = None,
         property_type: str | None = None,
         max_price: float | None = None,
+        max_predicted: float | None = None,
         min_epc: str | None = None,
+        min_condition: str | None = None,
+        min_area: float | None = None,
+        min_bedrooms: int | None = None,
+        regime: str | None = None,
+        has_garden: bool = False,
+        has_terrace: bool = False,
+        price_cut_only: bool = False,
+        min_jepa_dz: float | None = None,
+        search: str | None = None,
+        include_archive: bool = False,
         min_delta_pct: float | None = None,
         below_band_only: bool = False,
         available_only: bool = False,
         limit: int = 200,
     ) -> dict:
         """City-wide deal feed: uses live scraped listings when fresh, otherwise falls back
-        to the latest Phase-7 OOF scored corpus listings so the Deal Hunter is always useful.
+        to local Phase-7 OOF scored corpus listings (no Immoweb requests needed).
         """
         EPC_RANK = {"F": 0, "E": 1, "D": 2, "C": 3, "B": 4, "A": 5, "A+": 6, "A++": 7}
+        COND_RANK = {
+            "TO_RESTORE": 0,
+            "TO_RENOVATE": 1,
+            "TO_REFURBISH": 1,
+            "TO_BE_DONE_UP": 2,
+            "GOOD": 3,
+            "FIRST_TIME_USED": 4,
+            "JUST_RENOVATED": 4,
+            "AS_NEW": 5,
+        }
 
-        if self.listings_df is not None and len(self.listings_df) > 0:
+        if not include_archive and self.listings_df is not None and len(self.listings_df) > 0:
             df = self.listings_df.copy()
             source = "live_scrape"
             date_used = self.date_used
@@ -236,7 +257,7 @@ class LiveListingsService:
                 df["days_since_last_seen"] = 0
                 df["latest_scrape_date"] = self.date_used
         else:
-            source = "corpus_recent"
+            source = "corpus_full" if include_archive else "corpus_recent"
             date_used = None
             adf = getattr(self.data_loader, "analytics_df", None) if self.data_loader is not None else None
             if not isinstance(adf, pd.DataFrame) or adf.empty or "pred_mm_eur" not in adf.columns:
@@ -254,10 +275,11 @@ class LiveListingsService:
                 max_dt = sub["_last_dt"].max()
                 if pd.notna(max_dt):
                     date_used = max_dt.strftime("%Y-%m-%d")
-                    cutoff = max_dt - pd.Timedelta(days=90)
-                    recent = sub[sub["_last_dt"] >= cutoff]
-                    if len(recent) >= 100:
-                        sub = recent
+                    if not include_archive:
+                        cutoff = max_dt - pd.Timedelta(days=90)
+                        recent = sub[sub["_last_dt"] >= cutoff]
+                        if len(recent) >= 100:
+                            sub = recent
             if "normal_mask" in sub.columns:
                 sub = sub[sub["normal_mask"].fillna(True).astype(bool)]
 
@@ -401,9 +423,50 @@ class LiveListingsService:
         if max_price is not None and max_price > 0:
             df = df[pd.to_numeric(df["asking_price"], errors="coerce") <= max_price]
 
+        if max_predicted is not None and max_predicted > 0:
+            df = df[pd.to_numeric(df["predicted_price"], errors="coerce") <= max_predicted]
+
         if min_epc and min_epc.upper().rstrip("+") in EPC_RANK:
             min_rank = EPC_RANK[min_epc.upper().rstrip("+")]
             df = df[df["energy_label"].astype(str).str.upper().map(EPC_RANK).fillna(-1) >= min_rank]
+
+        if min_condition and min_condition.upper().rstrip("+") in COND_RANK:
+            min_cr = COND_RANK[min_condition.upper().rstrip("+")]
+            df = df[df["condition"].astype(str).str.upper().map(COND_RANK).fillna(-1) >= min_cr]
+
+        if min_area is not None and min_area > 0:
+            df = df[pd.to_numeric(df["livable_area"], errors="coerce") >= min_area]
+
+        if min_bedrooms is not None and min_bedrooms > 0:
+            df = df[pd.to_numeric(df["bedrooms"], errors="coerce") >= min_bedrooms]
+
+        if regime and regime.lower() not in ("all", "any"):
+            if "property_regime" in df.columns:
+                if regime.lower() == "non_standard":
+                    df = df[df["property_regime"].fillna("residential") != "residential"]
+                else:
+                    df = df[df["property_regime"].fillna("residential") == regime.lower()]
+
+        if has_garden and "has_garden" in df.columns:
+            df = df[df["has_garden"].fillna(False).astype(bool)]
+
+        if has_terrace and "has_terrace" in df.columns:
+            df = df[df["has_terrace"].fillna(False).astype(bool)]
+
+        if price_cut_only and "had_price_cut" in df.columns:
+            df = df[df["had_price_cut"].fillna(False).astype(bool)]
+
+        if min_jepa_dz is not None and "jepa_dz_quality" in df.columns:
+            df = df[pd.to_numeric(df["jepa_dz_quality"], errors="coerce") >= min_jepa_dz]
+
+        if search and search.strip():
+            q = search.strip().lower()
+            cols_to_search = [c for c in ("address", "neighbourhood", "title", "description_snippet", "agency", "property_id") if c in df.columns]
+            if cols_to_search:
+                m_q = pd.Series(False, index=df.index)
+                for col in cols_to_search:
+                    m_q |= df[col].fillna("").astype(str).str.lower().str.contains(q, regex=False)
+                df = df[m_q]
 
         if min_delta_pct is not None:
             df = df[pd.to_numeric(df["delta_pct"], errors="coerce") >= min_delta_pct]

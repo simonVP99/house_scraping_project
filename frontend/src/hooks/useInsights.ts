@@ -31,3 +31,22 @@ export function useDeals(params: DealsQuery) {
     staleTime: 1000 * 60 * 2,
   });
 }
+
+export function usePropertyDossier(propertyId: string | null) {
+  return useQuery({
+    queryKey: ["property-dossier", propertyId],
+    queryFn: () => api.getPropertyDossier(propertyId!),
+    enabled: Boolean(propertyId),
+    staleTime: 1000 * 60 * 10,
+  });
+}
+
+export function useCompareProperties(propertyIds: string[], enabled: boolean) {
+  const key = propertyIds.join(",");
+  return useQuery({
+    queryKey: ["compare-properties", key],
+    queryFn: () => api.compareProperties(propertyIds),
+    enabled: enabled && propertyIds.length > 0,
+    staleTime: 1000 * 60 * 10,
+  });
+}
