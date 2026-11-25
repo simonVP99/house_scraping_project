@@ -74,3 +74,70 @@ def test_listings_refresh(client, mock_listings_service):
     data = resp.get_json()
     assert data["count"] == 1
     mock_listings_service.refresh.assert_called_once()
+
+
+def test_deals_endpoint_and_filters():
+    import pandas as pd
+    from api.live_listings import LiveListingsService
+
+    svc = LiveListingsService.__new__(LiveListingsService)
+    svc.prediction_service = None
+    svc.date_used = None
+    svc.listings_df = pd.DataFrame()  # Force corpus fallback
+
+    mock_loader = MagicMock()
+    mock_loader.analytics_df = pd.DataFrame([
+        {
+            "property_id": "101",
+            "date_obtained": "2026-11-10",
+            "price_eur": 300_000.0,
+            "pred_mm_eur": 380_000.0,
+            "normal_mask": True,
+            "livable_area": 135.0,
+            "number_of_bedrooms": 3,
+            "property_type_HOUSE": 1,
+            "property_type_label": "HOUSE",
+            "building_condition": "GOOD",
+            "energy_label": "B",
+            "neighbourhood": "Binnenstad",
+            "neighbourhood_display": "Binnenstad",
+            "postal_code": "9000",
+            "had_price_cut": True,
+        },
+        {
+            "property_id": "102",
+            "date_obtained": "2026-11-12",
+            "price_eur": 420_000.0,
+            "pred_mm_eur": 400_000.0,
+            "normal_mask": True,
+            "livable_area": 95.0,
+            "number_of_bedrooms": 2,
+            "property_type_HOUSE": 0,
+            "property_type_label": "APARTMENT",
+            "building_condition": "AS_NEW",
+            "energy_label": "E",
+            "neighbourhood": "Dampoort",
+            "neighbourhood_display": "Dampoort",
+            "postal_code": "9040",
+            "had_price_cut": False,
+        },
+    ])
+    svc.data_loader = mock_loader
+
+    # Corpus fallback with filters
+    res = svc.get_deals(property_type="HOUSE", min_epc="B", min_delta_pct=10.0, below_band_only=True)
+    assert res["source"] == "corpus_recent"
+    assert res["total"] == 1
+    assert res["deals"][0]["property_id"] == "101"
+    assert res["deals"][0]["band_position"] == "below_band"
+    assert res["deals"][0]["had_price_cut"] is True
+
+    # Route test through Flask app
+    app = create_app(loader=mock_loader, pred_service=MagicMock(), listings_service=svc)
+    app.config["TESTING"] = True
+    resp = app.test_client().get("/api/deals?property_type=HOUSE&min_epc=C&below_band_only=true")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["source"] == "corpus_recent"
+    assert len(body["deals"]) == 1
+    assert body["deals"][0]["property_id"] == "101"

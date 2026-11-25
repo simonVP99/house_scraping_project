@@ -178,6 +178,46 @@ export interface AffordabilityNeighbourhood {
   geojson: GeoJSON.GeoJsonObject | null;
 }
 
+export interface DealItem {
+  property_id: string;
+  address: string;
+  url: string;
+  asking_price: number;
+  predicted_price: number;
+  low_eur: number;
+  high_eur: number;
+  interval_halfwidth_pct: number;
+  band_position: "below_band" | "inside_band" | "above_band";
+  delta_eur: number;
+  delta_pct: number;
+  livable_area: number | null;
+  bedrooms: number | null;
+  condition: string | null;
+  energy_label: string | null;
+  property_type: string | null;
+  neighbourhood: string | null;
+  date_obtained: string | null;
+  had_price_cut?: boolean;
+  source: "live" | "corpus_recent" | string;
+}
+
+export interface DealsQuery {
+  neighbourhood?: string;
+  property_type?: string;
+  max_price?: number;
+  min_epc?: string;
+  min_delta_pct?: number;
+  below_band_only?: boolean;
+  limit?: number;
+}
+
+export interface DealsResponse {
+  deals: DealItem[];
+  total: number;
+  source: "live_scrape" | "corpus_recent" | "empty" | string;
+  date_used: string | null;
+}
+
 export interface AffordabilityResponse {
   query: AffordabilityQuery;
   neighbourhoods: AffordabilityNeighbourhood[];

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate } from "react-router-do
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const PredictPage = lazy(() => import("./pages/PredictPage"));
+const DealsPage = lazy(() => import("./pages/DealsPage"));
 const AffordabilityPage = lazy(() => import("./pages/AffordabilityPage"));
 const NeighbourhoodsPage = lazy(() => import("./pages/NeighbourhoodsPage"));
 const InsightsPage = lazy(() => import("./pages/InsightsPage"));
@@ -18,6 +19,7 @@ const queryClient = new QueryClient({
 
 const NAV_ITEMS = [
   { to: "/predict", label: "Predict" },
+  { to: "/deals", label: "Deals" },
   { to: "/explore", label: "Affordability" },
   { to: "/neighbourhoods", label: "Neighbourhoods" },
   { to: "/insights", label: "Insights & EDA" },
@@ -77,6 +79,7 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<Navigate to="/predict" replace />} />
                 <Route path="/predict" element={<PredictPage />} />
+                <Route path="/deals" element={<DealsPage />} />
                 <Route path="/explore" element={<AffordabilityPage />} />
                 <Route path="/neighbourhoods" element={<NeighbourhoodsPage />} />
                 <Route path="/insights" element={<InsightsPage />} />

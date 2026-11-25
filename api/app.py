@@ -231,6 +231,25 @@ def create_app(loader=None, pred_service=None, listings_service=None):
             return jsonify({"count": 0, "date_used": None})
         return jsonify(live_listings_service.get_count())
 
+    @app.route("/api/deals")
+    def deals_feed():
+        """City-wide Deal Hunter feed (live scraped listings when fresh, else recent Phase-7 OOF)."""
+        if live_listings_service is None:
+            return jsonify({"deals": [], "total": 0, "source": "unavailable", "date_used": None}), 503
+        max_price_raw = request.args.get("max_price")
+        min_delta_raw = request.args.get("min_delta_pct")
+        limit_raw = request.args.get("limit", "150")
+        payload = live_listings_service.get_deals(
+            neighbourhood=request.args.get("neighbourhood"),
+            property_type=request.args.get("property_type"),
+            max_price=float(max_price_raw) if max_price_raw else None,
+            min_epc=request.args.get("min_epc"),
+            min_delta_pct=float(min_delta_raw) if min_delta_raw else None,
+            below_band_only=request.args.get("below_band_only", "").lower() in ("1", "true", "yes"),
+            limit=int(limit_raw) if limit_raw.isdigit() else 150,
+        )
+        return jsonify(payload)
+
     # ---- Model Metadata & Market Insights --------------------------------
     @app.route("/api/model/metadata")
     def model_metadata():

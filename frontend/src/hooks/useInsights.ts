@@ -1,6 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "../services/api";
-import type { AffordabilityQuery } from "../types/insights";
+import type { AffordabilityQuery, DealsQuery } from "../types/insights";
 
 export function useMarketInsights() {
   return useQuery({
@@ -21,5 +21,13 @@ export function useModelMetadata() {
 export function useAffordability() {
   return useMutation({
     mutationFn: (query: AffordabilityQuery) => api.evaluateAffordability(query),
+  });
+}
+
+export function useDeals(params: DealsQuery) {
+  return useQuery({
+    queryKey: ["deals", params],
+    queryFn: () => api.getDeals(params),
+    staleTime: 1000 * 60 * 2,
   });
 }

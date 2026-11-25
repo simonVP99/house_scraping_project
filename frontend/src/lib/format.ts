@@ -47,6 +47,7 @@ export function formatCondition(code: string | null | undefined): string {
     TO_BE_DONE_UP: "To refresh",
     TO_RENOVATE: "To renovate",
     TO_RESTORE: "To restore",
+    FIRST_TIME_USED: "First-time use",
   };
   return map[code] ?? code.replace(/_/g, " ").toLowerCase();
 }

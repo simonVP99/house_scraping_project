@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd template for daily 08:15 Ghent Deal Hunter refresh (Issue #23).
+  Install:
+    cp deploy/com.ghent-avm.daily-refresh.plist ~/Library/LaunchAgents/
+    # Edit WorkingDirectory / ProgramArguments if your repo path differs
+    launchctl load -w ~/Library/LaunchAgents/com.ghent-avm.daily-refresh.plist
+  Note: Immoweb DataDome requires a logged-in macOS GUI session (LaunchAgent, not root daemon).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ghent-avm.daily-refresh</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/svp/Personal/immo_datacollection/house_scraping_project</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/svp/Personal/immo_datacollection/house_scraping_project/scripts/daily_refresh.sh</string>
+    <string>--pages</string>
+    <string>3</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/svp/Personal/immo_datacollection/house_scraping_project/logs/launchd_daily_refresh.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/svp/Personal/immo_datacollection/house_scraping_project/logs/launchd_daily_refresh.err.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
