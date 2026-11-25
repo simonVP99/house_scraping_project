@@ -12,6 +12,7 @@ import {
   Cell,
 } from "recharts";
 import { useEdaReport } from "../hooks/useEdaReport";
+import { useTableSort, sortGlyph } from "../hooks/useTableSort";
 import EdaFieldTable from "../components/EdaFieldTable";
 import EdaSpatialMap from "../components/EdaSpatialMap";
 import type { EdaReport } from "../types/eda";
@@ -208,7 +209,11 @@ function Overview({ data }: { data: EdaReport }) {
 }
 
 function Missingness({ data }: { data: EdaReport }) {
-  const rows = data.missingness.fields;
+  const { sorted: rows, sort, toggle } = useTableSort(
+    data.missingness.fields,
+    "null_pct",
+    "desc",
+  );
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 text-sm">
@@ -226,9 +231,33 @@ function Missingness({ data }: { data: EdaReport }) {
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr className="text-left">
-              <th className="px-3 py-2 font-medium">Field</th>
-              <th className="px-3 py-2 font-medium">Null rate</th>
-              <th className="px-3 py-2 font-medium text-right">Missing rows</th>
+              <th
+                onClick={() => toggle("field", "asc")}
+                className="px-3 py-2 font-medium cursor-pointer select-none hover:text-foreground whitespace-nowrap"
+              >
+                Field{" "}
+                <span className={`ml-0.5 text-[10px] ${sort.key === "field" ? "text-primary" : "opacity-35"}`}>
+                  {sortGlyph(sort.key === "field", sort.dir)}
+                </span>
+              </th>
+              <th
+                onClick={() => toggle("null_pct", "desc")}
+                className="px-3 py-2 font-medium cursor-pointer select-none hover:text-foreground whitespace-nowrap"
+              >
+                Null rate{" "}
+                <span className={`ml-0.5 text-[10px] ${sort.key === "null_pct" ? "text-primary" : "opacity-35"}`}>
+                  {sortGlyph(sort.key === "null_pct", sort.dir)}
+                </span>
+              </th>
+              <th
+                onClick={() => toggle("null_count", "desc")}
+                className="px-3 py-2 font-medium text-right cursor-pointer select-none hover:text-foreground whitespace-nowrap"
+              >
+                Missing rows{" "}
+                <span className={`ml-0.5 text-[10px] ${sort.key === "null_count" ? "text-primary" : "opacity-35"}`}>
+                  {sortGlyph(sort.key === "null_count", sort.dir)}
+                </span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -273,7 +302,11 @@ function TargetSection({ data }: { data: EdaReport }) {
       "",
   );
   const rows = data.target_by_group[group] ?? [];
-  const corr = data.correlations;
+  const { sorted: corr, sort: corrSort, toggle: toggleCorr } = useTableSort(
+    data.correlations,
+    "spearman",
+    "desc",
+  );
 
   return (
     <div className="space-y-6">
@@ -305,10 +338,27 @@ function TargetSection({ data }: { data: EdaReport }) {
           <table className="w-full text-xs">
             <thead className="bg-muted/50 sticky top-0">
               <tr className="text-left">
-                <th className="px-2 py-1.5 font-medium">Field</th>
-                <th className="px-2 py-1.5 font-medium text-right">Spearman</th>
-                <th className="px-2 py-1.5 font-medium text-right">Pearson</th>
-                <th className="px-2 py-1.5 font-medium text-right">n</th>
+                {(
+                  [
+                    ["field", "Field", "left", "asc"],
+                    ["spearman", "Spearman", "right", "desc"],
+                    ["pearson", "Pearson", "right", "desc"],
+                    ["n", "n", "right", "desc"],
+                  ] as const
+                ).map(([key, label, align, defDir]) => (
+                  <th
+                    key={key}
+                    onClick={() => toggleCorr(key, defDir)}
+                    className={`px-2 py-1.5 font-medium cursor-pointer select-none hover:text-foreground whitespace-nowrap ${
+                      align === "right" ? "text-right" : ""
+                    }`}
+                  >
+                    {label}{" "}
+                    <span className={`ml-0.5 text-[10px] ${corrSort.key === key ? "text-primary" : "opacity-35"}`}>
+                      {sortGlyph(corrSort.key === key, corrSort.dir)}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -342,8 +392,10 @@ function SpatialSection({ data }: { data: EdaReport }) {
     "median_price",
   );
   const spatial = data.spatial;
-  const topPostal = [...spatial.postal_codes].sort(
-    (a, b) => b.median_price - a.median_price,
+  const { sorted: topPostal, sort: postalSort, toggle: togglePostal } = useTableSort(
+    spatial.postal_codes,
+    "median_price",
+    "desc",
   );
 
   return (
@@ -385,9 +437,26 @@ function SpatialSection({ data }: { data: EdaReport }) {
           <table className="w-full text-sm">
             <thead className="bg-muted/50 sticky top-0">
               <tr className="text-left">
-                <th className="px-2 py-1.5 font-medium">Postal</th>
-                <th className="px-2 py-1.5 font-medium text-right">Median</th>
-                <th className="px-2 py-1.5 font-medium text-right">n</th>
+                {(
+                  [
+                    ["postal_code", "Postal", "left", "asc"],
+                    ["median_price", "Median", "right", "desc"],
+                    ["n", "n", "right", "desc"],
+                  ] as const
+                ).map(([key, label, align, defDir]) => (
+                  <th
+                    key={key}
+                    onClick={() => togglePostal(key, defDir)}
+                    className={`px-2 py-1.5 font-medium cursor-pointer select-none hover:text-foreground whitespace-nowrap ${
+                      align === "right" ? "text-right" : ""
+                    }`}
+                  >
+                    {label}{" "}
+                    <span className={`ml-0.5 text-[10px] ${postalSort.key === key ? "text-primary" : "opacity-35"}`}>
+                      {sortGlyph(postalSort.key === key, postalSort.dir)}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>

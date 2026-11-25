@@ -1,7 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDownUp,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -26,6 +25,7 @@ import {
 import { useDeals } from "../hooks/useInsights";
 import { useNeighbourhoods } from "../hooks/useNeighbourhoods";
 import { useRefreshListings } from "../hooks/useLiveListings";
+import { sortGlyph } from "../hooks/useTableSort";
 import { api } from "../services/api";
 import DealDossierPanel from "../components/DealDossierPanel";
 import CompareModal from "../components/CompareModal";
@@ -39,7 +39,7 @@ import {
   formatPsm,
 } from "../lib/format";
 
-type SortKey = "delta_pct" | "delta_eur" | "asking_price" | "predicted_price" | "livable_area" | "days_since_last_seen";
+type SortKey = "neighbourhood" | "delta_pct" | "delta_eur" | "asking_price" | "predicted_price" | "livable_area" | "days_since_last_seen";
 
 const MAX_COMPARE = 4;
 
@@ -197,6 +197,11 @@ export default function DealsPage() {
   const deals = useMemo(() => {
     const items = [...(data?.deals ?? [])];
     items.sort((a, b) => {
+      if (sortKey === "neighbourhood") {
+        const sa = String(a.neighbourhood || a.address || "");
+        const sb = String(b.neighbourhood || b.address || "");
+        return sortDesc ? sb.localeCompare(sa) : sa.localeCompare(sb);
+      }
       const av = Number(a[sortKey] ?? (sortKey === "days_since_last_seen" ? 9999 : -Infinity));
       const bv = Number(b[sortKey] ?? (sortKey === "days_since_last_seen" ? 9999 : -Infinity));
       return sortDesc ? bv - av : av - bv;
@@ -244,7 +249,7 @@ export default function DealsPage() {
     if (sortKey === key) setSortDesc((d) => !d);
     else {
       setSortKey(key);
-      setSortDesc(key !== "asking_price" && key !== "days_since_last_seen");
+      setSortDesc(key !== "asking_price" && key !== "days_since_last_seen" && key !== "neighbourhood");
     }
   };
 
@@ -640,30 +645,52 @@ export default function DealsPage() {
                     <Scale className="w-3.5 h-3.5 mx-auto text-muted-foreground" />
                   </TableHead>
                   <TableHead className="w-7" />
-                  <TableHead>Property</TableHead>
+                  <TableHead>
+                    <button type="button" onClick={() => handleSort("neighbourhood")} className="inline-flex items-center gap-1 hover:text-foreground cursor-pointer">
+                      Property{" "}
+                      <span className={`text-[10px] ${sortKey === "neighbourhood" ? "text-primary" : "opacity-35"}`}>
+                        {sortGlyph(sortKey === "neighbourhood", sortDesc ? "desc" : "asc")}
+                      </span>
+                    </button>
+                  </TableHead>
                   <TableHead>
                     <button type="button" onClick={() => handleSort("days_since_last_seen")} className="inline-flex items-center gap-1 hover:text-foreground cursor-pointer">
-                      Availability <ArrowDownUp className="w-3 h-3" />
+                      Availability{" "}
+                      <span className={`text-[10px] ${sortKey === "days_since_last_seen" ? "text-primary" : "opacity-35"}`}>
+                        {sortGlyph(sortKey === "days_since_last_seen", sortDesc ? "desc" : "asc")}
+                      </span>
                     </button>
                   </TableHead>
                   <TableHead className="text-right">
                     <button type="button" onClick={() => handleSort("asking_price")} className="inline-flex items-center gap-1 hover:text-foreground cursor-pointer">
-                      Asking <ArrowDownUp className="w-3 h-3" />
+                      Asking{" "}
+                      <span className={`text-[10px] ${sortKey === "asking_price" ? "text-primary" : "opacity-35"}`}>
+                        {sortGlyph(sortKey === "asking_price", sortDesc ? "desc" : "asc")}
+                      </span>
                     </button>
                   </TableHead>
                   <TableHead className="text-right">
                     <button type="button" onClick={() => handleSort("predicted_price")} className="inline-flex items-center gap-1 hover:text-foreground cursor-pointer">
-                      Phase-7 Fair <ArrowDownUp className="w-3 h-3" />
+                      Phase-7 Fair{" "}
+                      <span className={`text-[10px] ${sortKey === "predicted_price" ? "text-primary" : "opacity-35"}`}>
+                        {sortGlyph(sortKey === "predicted_price", sortDesc ? "desc" : "asc")}
+                      </span>
                     </button>
                   </TableHead>
                   <TableHead className="text-right">
                     <button type="button" onClick={() => handleSort("delta_pct")} className="inline-flex items-center gap-1 hover:text-foreground cursor-pointer">
-                      Value Gap <ArrowDownUp className="w-3 h-3" />
+                      Value Gap{" "}
+                      <span className={`text-[10px] ${sortKey === "delta_pct" ? "text-primary" : "opacity-35"}`}>
+                        {sortGlyph(sortKey === "delta_pct", sortDesc ? "desc" : "asc")}
+                      </span>
                     </button>
                   </TableHead>
                   <TableHead className="text-right">
                     <button type="button" onClick={() => handleSort("livable_area")} className="inline-flex items-center gap-1 hover:text-foreground cursor-pointer">
-                      Specs <ArrowDownUp className="w-3 h-3" />
+                      Specs{" "}
+                      <span className={`text-[10px] ${sortKey === "livable_area" ? "text-primary" : "opacity-35"}`}>
+                        {sortGlyph(sortKey === "livable_area", sortDesc ? "desc" : "asc")}
+                      </span>
                     </button>
                   </TableHead>
                   <TableHead className="text-right">Link</TableHead>

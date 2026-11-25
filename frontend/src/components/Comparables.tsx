@@ -1,8 +1,18 @@
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import type { ComparablesData, Differentiator } from "../types/prediction";
+import type { Comparable, ComparablesData, Differentiator } from "../types/prediction";
 import { formatEur, formatEurCompact, formatPsm, formatCondition, formatNeighbourhood } from "../lib/format";
+import { useTableSort, sortGlyph } from "../hooks/useTableSort";
+
+type CompSortKey = "price_k" | "price_per_sqm" | "livable_area" | "bedrooms" | "condition" | "energy_label" | "age";
+
+const EPC_RANK: Record<string, number> = { F: 0, E: 1, D: 2, C: 3, B: 4, A: 5, "A+": 6, "A++": 7 };
+
+const COMP_ACCESSORS: Partial<Record<CompSortKey, (p: Comparable) => string | number | null | undefined>> = {
+  energy_label: (p) => (p.energy_label ? (EPC_RANK[p.energy_label.toUpperCase()] ?? -1) : null),
+  condition: (p) => formatCondition(p.condition),
+};
 
 interface Props {
   comparables: ComparablesData;
@@ -24,6 +34,12 @@ export default function Comparables({ comparables, askingPrice, predictedPrice, 
   const predictedPsm = predictedPrice && livableArea ? Math.round(predictedPrice / livableArea) : null;
   const askingPsm = askingPrice && livableArea ? Math.round(askingPrice / livableArea) : comparables.subject_price_per_sqm;
   const medianEur = median_price_k * 1000;
+  const { sorted: sortedProps, sort, toggle } = useTableSort<Comparable, CompSortKey>(
+    properties,
+    "price_k",
+    "asc",
+    COMP_ACCESSORS,
+  );
 
   return (
     <section aria-label="Market context and comparables" className="rounded-xl border border-border bg-card p-5 space-y-6">
@@ -75,18 +91,33 @@ export default function Comparables({ comparables, askingPrice, predictedPrice, 
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="text-xs">Price</TableHead>
-                <TableHead className="text-xs">€/m²</TableHead>
-                <TableHead className="text-xs">Area</TableHead>
-                <TableHead className="text-xs">Beds</TableHead>
-                <TableHead className="text-xs">Condition</TableHead>
-                <TableHead className="text-xs">EPC</TableHead>
-                <TableHead className="text-xs">Age</TableHead>
+                {(
+                  [
+                    ["price_k", "Price", "asc"],
+                    ["price_per_sqm", "€/m²", "asc"],
+                    ["livable_area", "Area", "desc"],
+                    ["bedrooms", "Beds", "desc"],
+                    ["condition", "Condition", "asc"],
+                    ["energy_label", "EPC", "desc"],
+                    ["age", "Age", "asc"],
+                  ] as const
+                ).map(([key, label, defDir]) => (
+                  <TableHead
+                    key={key}
+                    onClick={() => toggle(key, defDir)}
+                    className="text-xs cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap"
+                  >
+                    {label}{" "}
+                    <span className={`ml-0.5 text-[10px] ${sort.key === key ? "text-primary" : "opacity-35"}`}>
+                      {sortGlyph(sort.key === key, sort.dir)}
+                    </span>
+                  </TableHead>
+                ))}
                 <TableHead className="text-xs text-right">Listing</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {properties.map((p, i) => (
+              {sortedProps.map((p, i) => (
                 <TableRow key={p.property_id || i}>
                   <TableCell className="font-semibold text-sm tabular-nums">
                     {formatEur(p.price_k * 1000)}

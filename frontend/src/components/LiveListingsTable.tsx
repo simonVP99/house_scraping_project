@@ -11,7 +11,9 @@ interface Props {
   listings: LiveListing[];
 }
 
-type SortKey = "asking_price" | "predicted_price" | "delta_pct" | "livable_area" | "bedrooms";
+type SortKey = "address" | "asking_price" | "predicted_price" | "delta_pct" | "livable_area" | "energy_label";
+
+const EPC_RANK: Record<string, number> = { F: 0, E: 1, D: 2, C: 3, B: 4, A: 5, "A+": 6, "A++": 7 };
 
 function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
   if (!active) return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-35" />;
@@ -31,7 +33,7 @@ export default function LiveListingsTable({ listings }: Props) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else {
       setSortKey(key);
-      setSortDir("desc");
+      setSortDir(key === "address" || key === "asking_price" ? "asc" : "desc");
     }
   };
 
@@ -47,6 +49,16 @@ export default function LiveListingsTable({ listings }: Props) {
       : listings;
 
     return [...filtered].sort((a, b) => {
+      if (sortKey === "address") {
+        const sa = String(a.address ?? "");
+        const sb = String(b.address ?? "");
+        return sortDir === "asc" ? sa.localeCompare(sb) : sb.localeCompare(sa);
+      }
+      if (sortKey === "energy_label") {
+        const ea = a.energy_label ? (EPC_RANK[a.energy_label.toUpperCase()] ?? -1) : -1;
+        const eb = b.energy_label ? (EPC_RANK[b.energy_label.toUpperCase()] ?? -1) : -1;
+        return sortDir === "asc" ? ea - eb : eb - ea;
+      }
       const av = Number(a[sortKey] ?? -Infinity);
       const bv = Number(b[sortKey] ?? -Infinity);
       return sortDir === "asc" ? av - bv : bv - av;
@@ -73,7 +85,9 @@ export default function LiveListingsTable({ listings }: Props) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="text-xs">Property</TableHead>
+              <TableHead onClick={() => toggleSort("address")} className="text-xs cursor-pointer select-none">
+                Property <SortIcon active={sortKey === "address"} dir={sortDir} />
+              </TableHead>
               <TableHead onClick={() => toggleSort("asking_price")} className="text-xs text-right cursor-pointer select-none">
                 Asking <SortIcon active={sortKey === "asking_price"} dir={sortDir} />
               </TableHead>
@@ -86,7 +100,9 @@ export default function LiveListingsTable({ listings }: Props) {
               <TableHead onClick={() => toggleSort("livable_area")} className="text-xs text-right cursor-pointer select-none">
                 Area <SortIcon active={sortKey === "livable_area"} dir={sortDir} />
               </TableHead>
-              <TableHead className="text-xs">Cond. / EPC</TableHead>
+              <TableHead onClick={() => toggleSort("energy_label")} className="text-xs cursor-pointer select-none">
+                Cond. / EPC <SortIcon active={sortKey === "energy_label"} dir={sortDir} />
+              </TableHead>
               <TableHead className="text-xs text-right">Link</TableHead>
             </TableRow>
           </TableHeader>

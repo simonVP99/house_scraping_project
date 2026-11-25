@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import type { FieldProfile } from "../types/eda";
+import { sortGlyph, type SortDir } from "../hooks/useTableSort";
 
 interface Props {
   fields: FieldProfile[];
@@ -35,8 +36,17 @@ function nullTone(pct: number): string {
 export default function EdaFieldTable({ fields }: Props) {
   const [kind, setKind] = useState<string>("all");
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"name" | "null" | "unique" | "signal">("null");
+  const [sortBy, setSortBy] = useState<"name" | "kind" | "non_null" | "null" | "unique" | "signal">("null");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [expanded, setExpanded] = useState<string | null>(null);
+
+  const toggleSort = (col: typeof sortBy, defaultDir: SortDir = "desc") => {
+    if (sortBy === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortBy(col);
+      setSortDir(defaultDir);
+    }
+  };
 
   const kinds = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -52,18 +62,21 @@ export default function EdaFieldTable({ fields }: Props) {
       out = out.filter((f) => f.name.toLowerCase().includes(q));
     }
     const sorted = [...out];
-    if (sortBy === "name") sorted.sort((a, b) => a.name.localeCompare(b.name));
-    else if (sortBy === "null") sorted.sort((a, b) => b.null_pct - a.null_pct);
-    else if (sortBy === "unique")
-      sorted.sort((a, b) => (b.n_unique ?? 0) - (a.n_unique ?? 0));
+    const mul = sortDir === "asc" ? 1 : -1;
+    if (sortBy === "name") sorted.sort((a, b) => a.name.localeCompare(b.name) * mul);
+    else if (sortBy === "kind") sorted.sort((a, b) => a.kind.localeCompare(b.kind) * mul);
+    else if (sortBy === "non_null") sorted.sort((a, b) => (a.non_null - b.non_null) * mul);
+    else if (sortBy === "null") sorted.sort((a, b) => (a.null_pct - b.null_pct) * mul);
+    else if (sortBy === "unique") sorted.sort((a, b) => ((a.n_unique ?? 0) - (b.n_unique ?? 0)) * mul);
     else
       sorted.sort(
         (a, b) =>
-          Math.abs((b.stats?.std ?? 0) / (b.stats?.mean || 1)) -
-          Math.abs((a.stats?.std ?? 0) / (a.stats?.mean || 1)),
+          (Math.abs((a.stats?.std ?? 0) / (a.stats?.mean || 1)) -
+            Math.abs((b.stats?.std ?? 0) / (b.stats?.mean || 1))) *
+          mul,
       );
     return sorted;
-  }, [fields, kind, search, sortBy]);
+  }, [fields, kind, search, sortBy, sortDir]);
 
   return (
     <div className="space-y-3">
@@ -102,11 +115,17 @@ export default function EdaFieldTable({ fields }: Props) {
         </div>
         <select
           value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+          onChange={(e) => {
+            const v = e.target.value as typeof sortBy;
+            setSortBy(v);
+            setSortDir(v === "name" || v === "kind" ? "asc" : "desc");
+          }}
           className="h-9 rounded-md border border-border bg-background px-2 text-sm ml-auto"
         >
           <option value="null">sort: null rate</option>
           <option value="name">sort: name</option>
+          <option value="kind">sort: kind</option>
+          <option value="non_null">sort: declared</option>
           <option value="unique">sort: cardinality</option>
           <option value="signal">sort: variability</option>
         </select>
@@ -120,11 +139,28 @@ export default function EdaFieldTable({ fields }: Props) {
         <table className="w-full text-sm border-collapse">
           <thead className="bg-muted/50">
             <tr className="text-left">
-              <th className="px-3 py-2 font-medium">Field</th>
-              <th className="px-3 py-2 font-medium">Kind</th>
-              <th className="px-3 py-2 font-medium text-right">Declared</th>
-              <th className="px-3 py-2 font-medium text-right">Null %</th>
-              <th className="px-3 py-2 font-medium text-right">Unique</th>
+              {(
+                [
+                  ["name", "Field", "left", "asc"],
+                  ["kind", "Kind", "left", "asc"],
+                  ["non_null", "Declared", "right", "desc"],
+                  ["null", "Null %", "right", "desc"],
+                  ["unique", "Unique", "right", "desc"],
+                ] as const
+              ).map(([key, label, align, defDir]) => (
+                <th
+                  key={key}
+                  onClick={() => toggleSort(key, defDir)}
+                  className={`px-3 py-2 font-medium cursor-pointer select-none hover:text-foreground whitespace-nowrap ${
+                    align === "right" ? "text-right" : ""
+                  }`}
+                >
+                  {label}{" "}
+                  <span className={`ml-0.5 text-[10px] ${sortBy === key ? "text-primary" : "opacity-35"}`}>
+                    {sortGlyph(sortBy === key, sortDir)}
+                  </span>
+                </th>
+              ))}
               <th className="px-3 py-2 font-medium text-right">Summary</th>
             </tr>
           </thead>

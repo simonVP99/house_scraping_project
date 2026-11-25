@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -14,8 +14,9 @@ import {
 } from "recharts";
 import { ExternalLink } from "lucide-react";
 import { useMarketInsights } from "../hooks/useInsights";
+import { useTableSort, sortGlyph } from "../hooks/useTableSort";
 import EdaPage from "./EdaPage";
-import type { MarketInsights } from "../types/insights";
+import type { AgencyAuditRow, EpcLabelRow, MarketInsights, PropertyRegimeRow } from "../types/insights";
 import { formatCondition, formatEur, formatEurCompact, formatPsm, formatPctSigned } from "../lib/format";
 
 type TopTab = "model" | "agencies" | "epc" | "forensics" | "jepa" | "dataset";
@@ -284,9 +285,30 @@ function AgencyAuditTab({ data }: { data: MarketInsights }) {
   const topUnder = [...agencies].slice(-10).reverse();
   const chartData = [...topOver.slice(0, 8), ...topUnder.slice(0, 8).reverse()];
 
-  const filtered = search.trim()
-    ? agencies.filter((a) => a.agency.toLowerCase().includes(search.trim().toLowerCase()))
-    : agencies;
+  const filtered = useMemo(
+    () =>
+      search.trim()
+        ? agencies.filter((a) => a.agency.toLowerCase().includes(search.trim().toLowerCase()))
+        : agencies,
+    [agencies, search],
+  );
+
+  type AgencySortKey =
+    | "agency"
+    | "listings"
+    | "median_asking_eur"
+    | "median_fair_eur"
+    | "median_premium_pct"
+    | "pct_overpriced_10"
+    | "pct_price_cut"
+    | "median_jepa_dz"
+    | "median_duration_days";
+
+  const { sorted: sortedAgencies, sort: agSort, toggle: toggleAgSort } = useTableSort<AgencyAuditRow, AgencySortKey>(
+    filtered,
+    "median_premium_pct",
+    "desc",
+  );
 
   return (
     <div className="space-y-6">
@@ -343,19 +365,43 @@ function AgencyAuditTab({ data }: { data: MarketInsights }) {
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-muted/95 backdrop-blur border-b border-border text-xs text-muted-foreground">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium">Agency</th>
-                <th className="text-right px-3 py-2.5 font-medium">Listings</th>
-                <th className="text-right px-3 py-2.5 font-medium">Median Ask</th>
-                <th className="text-right px-3 py-2.5 font-medium">Fair Value</th>
-                <th className="text-right px-3 py-2.5 font-medium">Median Premium</th>
-                <th className="text-right px-3 py-2.5 font-medium">&gt;10% Over</th>
-                <th className="text-right px-3 py-2.5 font-medium">Price Cuts</th>
-                <th className="text-right px-3 py-2.5 font-medium" title="Cross-Modal JEPA median Δz_quality: positive = photos exceed specs, negative = photos look rougher than claimed specs">Photo Δz</th>
-                <th className="text-right px-4 py-2.5 font-medium">Med. Stay</th>
+                {(
+                  [
+                    ["agency", "Agency", "left", "asc", undefined],
+                    ["listings", "Listings", "right", "desc", undefined],
+                    ["median_asking_eur", "Median Ask", "right", "desc", undefined],
+                    ["median_fair_eur", "Fair Value", "right", "desc", undefined],
+                    ["median_premium_pct", "Median Premium", "right", "desc", undefined],
+                    ["pct_overpriced_10", ">10% Over", "right", "desc", undefined],
+                    ["pct_price_cut", "Price Cuts", "right", "desc", undefined],
+                    [
+                      "median_jepa_dz",
+                      "Photo Δz",
+                      "right",
+                      "desc",
+                      "Cross-Modal JEPA median Δz_quality: positive = photos exceed specs, negative = photos look rougher than claimed specs",
+                    ],
+                    ["median_duration_days", "Med. Stay", "right", "desc", undefined],
+                  ] as const
+                ).map(([key, label, align, defDir, title], idx, arr) => (
+                  <th
+                    key={key}
+                    title={title}
+                    onClick={() => toggleAgSort(key, defDir)}
+                    className={`${align === "left" ? "text-left" : "text-right"} ${
+                      idx === 0 ? "px-4" : idx === arr.length - 1 ? "px-4" : "px-3"
+                    } py-2.5 font-medium cursor-pointer select-none hover:text-foreground whitespace-nowrap`}
+                  >
+                    {label}{" "}
+                    <span className={`ml-0.5 text-[10px] ${agSort.key === key ? "text-primary" : "opacity-35"}`}>
+                      {sortGlyph(agSort.key === key, agSort.dir)}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60 tabular-nums">
-              {filtered.map((a) => (
+              {sortedAgencies.map((a) => (
                 <tr key={a.agency} className="hover:bg-muted/40">
                   <td className="px-4 py-2 font-medium text-foreground">{a.agency}</td>
                   <td className="px-3 py-2 text-right text-muted-foreground">{a.listings}</td>
@@ -391,9 +437,22 @@ function AgencyAuditTab({ data }: { data: MarketInsights }) {
 /* -------------------------------------------------------------------------- */
 /* 3. EPC Renovation Cliff & Condition Ladder Tab                             */
 /* -------------------------------------------------------------------------- */
+const EPC_ORDER: Record<string, number> = { "A++": 0, "A+": 1, A: 2, B: 3, C: 4, D: 5, E: 6, F: 7 };
+
+const EPC_ACCESSORS = {
+  label: (r: EpcLabelRow) => EPC_ORDER[r.label] ?? 99,
+};
+
 function EpcCliffTab({ data }: { data: MarketInsights }) {
   const [ptype, setPtype] = useState<string>("House");
   const active = data.epc_cliff.find((e) => e.property_type === ptype) ?? data.epc_cliff[0];
+  type EpcSortKey = "label" | "count" | "median_price_eur" | "median_price_sqm" | "vs_c_psqm_pct" | "median_area";
+  const { sorted: sortedEpc, sort: epcSort, toggle: toggleEpcSort } = useTableSort<EpcLabelRow, EpcSortKey>(
+    active?.labels ?? [],
+    "label",
+    "asc",
+    EPC_ACCESSORS,
+  );
 
   return (
     <div className="space-y-6">
@@ -448,16 +507,31 @@ function EpcCliffTab({ data }: { data: MarketInsights }) {
           <table className="w-full text-xs tabular-nums">
             <thead className="bg-muted/60 text-muted-foreground border-b border-border">
               <tr>
-                <th className="text-left px-3 py-2 font-medium">EPC</th>
-                <th className="text-right px-3 py-2 font-medium">Listings</th>
-                <th className="text-right px-3 py-2 font-medium">Median Price</th>
-                <th className="text-right px-3 py-2 font-medium">Median €/m²</th>
-                <th className="text-right px-3 py-2 font-medium">vs EPC C</th>
-                <th className="text-right px-3 py-2 font-medium">Med. Area</th>
+                {(
+                  [
+                    ["label", "EPC", "left", "asc"],
+                    ["count", "Listings", "right", "desc"],
+                    ["median_price_eur", "Median Price", "right", "desc"],
+                    ["median_price_sqm", "Median €/m²", "right", "desc"],
+                    ["vs_c_psqm_pct", "vs EPC C", "right", "desc"],
+                    ["median_area", "Med. Area", "right", "desc"],
+                  ] as const
+                ).map(([key, label, align, defDir]) => (
+                  <th
+                    key={key}
+                    onClick={() => toggleEpcSort(key, defDir)}
+                    className={`${align === "left" ? "text-left" : "text-right"} px-3 py-2 font-medium cursor-pointer select-none hover:text-foreground whitespace-nowrap`}
+                  >
+                    {label}{" "}
+                    <span className={`ml-0.5 text-[10px] ${epcSort.key === key ? "text-primary" : "opacity-35"}`}>
+                      {sortGlyph(epcSort.key === key, epcSort.dir)}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
-              {(active?.labels ?? []).map((row) => (
+              {sortedEpc.map((row) => (
                 <tr key={row.label} className={row.mandatory_renovation ? "bg-negative/5" : ""}>
                   <td className="px-3 py-2 font-bold">
                     {row.label}
@@ -584,6 +658,13 @@ function ForensicsTab({ data }: { data: MarketInsights }) {
 /* -------------------------------------------------------------------------- */
 function JepaLabTab({ data }: { data: MarketInsights }) {
   const jepa = data.jepa_forensics;
+  type RegimeSortKey = "label" | "count" | "median_asking_eur" | "mdape" | "p80_err" | "avg_duration_days" | "median_jepa_energy";
+  const { sorted: sortedRegimes, sort: regSort, toggle: toggleRegSort } = useTableSort<PropertyRegimeRow, RegimeSortKey>(
+    jepa?.regime_breakdown ?? [],
+    "count",
+    "desc",
+  );
+
   if (!jepa) {
     return (
       <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -811,17 +892,34 @@ function JepaLabTab({ data }: { data: MarketInsights }) {
           <table className="w-full text-sm">
             <thead className="bg-muted/60 border-b border-border text-xs text-muted-foreground">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium">Property Regime</th>
-                <th className="text-right px-3 py-2.5 font-medium">Listings</th>
-                <th className="text-right px-3 py-2.5 font-medium">Median Ask</th>
-                <th className="text-right px-3 py-2.5 font-medium">Phase-7 MdAPE</th>
-                <th className="text-right px-3 py-2.5 font-medium">P80 Error</th>
-                <th className="text-right px-3 py-2.5 font-medium">Avg Stay</th>
-                <th className="text-right px-4 py-2.5 font-medium">Med. JEPA Energy</th>
+                {(
+                  [
+                    ["label", "Property Regime", "left", "asc"],
+                    ["count", "Listings", "right", "desc"],
+                    ["median_asking_eur", "Median Ask", "right", "desc"],
+                    ["mdape", "Phase-7 MdAPE", "right", "desc"],
+                    ["p80_err", "P80 Error", "right", "desc"],
+                    ["avg_duration_days", "Avg Stay", "right", "desc"],
+                    ["median_jepa_energy", "Med. JEPA Energy", "right", "desc"],
+                  ] as const
+                ).map(([key, label, align, defDir], idx, arr) => (
+                  <th
+                    key={key}
+                    onClick={() => toggleRegSort(key, defDir)}
+                    className={`${align === "left" ? "text-left" : "text-right"} ${
+                      idx === 0 || idx === arr.length - 1 ? "px-4" : "px-3"
+                    } py-2.5 font-medium cursor-pointer select-none hover:text-foreground whitespace-nowrap`}
+                  >
+                    {label}{" "}
+                    <span className={`ml-0.5 text-[10px] ${regSort.key === key ? "text-primary" : "opacity-35"}`}>
+                      {sortGlyph(regSort.key === key, regSort.dir)}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60 tabular-nums">
-              {jepa.regime_breakdown.map((r) => {
+              {sortedRegimes.map((r) => {
                 const isStd = r.code === "residential";
                 return (
                   <tr key={r.code} className={isStd ? "bg-primary/5 font-medium" : "hover:bg-muted/40"}>
