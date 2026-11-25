@@ -60,9 +60,23 @@ export default function PredictionResultCard({
               </p>
               <span className="text-[11px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
                 {prediction.track === "multimodal"
-                  ? "Multimodal · 5-model ensemble"
+                  ? `Multimodal · ${prediction.n_photos_used || 6} photos + 5-model ensemble`
                   : "Tabular + Text · 5-model ensemble"}
               </span>
+              {prediction.track === "multimodal" &&
+                prediction.vision_shift_eur != null &&
+                Math.abs(prediction.vision_shift_eur) >= 1000 && (
+                  <span
+                    className={`text-[11px] font-medium px-2 py-0.5 rounded-full border tabular-nums ${
+                      prediction.vision_shift_eur > 0
+                        ? "bg-positive/10 text-positive border-positive/25"
+                        : "bg-negative/10 text-negative border-negative/25"
+                    }`}
+                  >
+                    Photos {formatEurSigned(prediction.vision_shift_eur)}
+                    {prediction.vision_shift_pct != null ? ` (${formatPctSigned(prediction.vision_shift_pct)})` : ""}
+                  </span>
+                )}
             </div>
 
             <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 mt-2">

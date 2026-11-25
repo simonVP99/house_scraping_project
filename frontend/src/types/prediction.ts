@@ -91,6 +91,10 @@ export interface PredictionResult {
     delta_pct: number | null;
     track?: "tabular_text" | "multimodal" | string;
     has_photos?: boolean;
+    n_photos_used?: number;
+    vision_source?: string | null;
+    vision_shift_eur?: number | null;
+    vision_shift_pct?: number | null;
     model_version?: string;
   };
   form_data: Record<string, unknown>;

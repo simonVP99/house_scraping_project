@@ -17,6 +17,7 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 from parser import build_row, extract_classified_json  # noqa: E402
+from live_vision import LiveVisionEncoder, extract_photo_urls_from_classified  # noqa: E402
 
 
 SHAP_LABEL_MAP = {
@@ -237,9 +238,10 @@ def _clean_form_dict(d: dict[str, Any]) -> dict[str, Any]:
 class PredictionService:
     """Unified prediction service backed by the Phase-7 Lean-5 `ProductionBundle`."""
 
-    def __init__(self, bundle=None, data_loader=None):
+    def __init__(self, bundle=None, data_loader=None, vision_encoder: LiveVisionEncoder | None = None):
         self.bundle = bundle
         self.data_loader = data_loader
+        self.vision_encoder = vision_encoder if vision_encoder is not None else LiveVisionEncoder()
 
     @staticmethod
     def parse_immoweb_html(html: str, url: str | None = None) -> dict[str, Any]:
@@ -250,9 +252,12 @@ class PredictionService:
         pid = _extract_property_id(url) or str(data.get("id") or "")
         date_str = datetime.now().strftime("%d%m%Y")
         row = build_row(data, pid, date_str)
-        # Preserve listing URL & clean NaNs for form_data serialization
+        # Preserve listing URL, photo URLs for live multimodal scoring, & clean NaNs
         row["url"] = url
-        return _clean_form_dict(row)
+        photo_urls = extract_photo_urls_from_classified(data)
+        cleaned = _clean_form_dict(row)
+        cleaned["_photo_urls"] = photo_urls
+        return cleaned
 
     # Alias for legacy callers/tests
     def _parse_immoweb_html(self, html: str, url: str | None = None) -> dict[str, Any]:
@@ -301,9 +306,14 @@ class PredictionService:
                 row[num_col] = float(s) if s != "" else None
         return row
 
-    def _score_single_row(self, row: dict[str, Any]) -> dict[str, Any]:
+    def _score_single_row(
+        self,
+        row: dict[str, Any],
+        vis_bundle: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Run Phase-7 production bundle on 1 row and build the unified API response."""
-        asking_price = row.get("price")
+        clean_row = {k: v for k, v in row.items() if not k.startswith("_")}
+        asking_price = clean_row.get("price")
         if asking_price is not None:
             try:
                 asking_price = float(asking_price)
@@ -312,8 +322,8 @@ class PredictionService:
             except (TypeError, ValueError):
                 asking_price = None
 
-        raw_df = pd.DataFrame([row])
-        pred_out = self.bundle.predict_raw(raw_df, include_shap=True)
+        raw_df = pd.DataFrame([clean_row])
+        pred_out = self.bundle.predict_raw(raw_df, vis_bundle=vis_bundle, include_shap=True)
 
         predicted_eur = float(pred_out["predicted_eur"][0])
         low_eur = float(pred_out["low_eur"][0])
@@ -323,6 +333,18 @@ class PredictionService:
         hw_pct = float(pred_out["interval_halfwidth_pct"][0])
         track_used = str(pred_out["track_used"][0])
         has_photos = bool(pred_out["has_photos"][0])
+
+        # Compute vision-vs-tabular shift when multimodal track ran so the UI can show photo impact
+        vision_shift_eur = None
+        vision_shift_pct = None
+        if has_photos and vis_bundle is not None and getattr(self.bundle, "tabular_text", None) is not None:
+            try:
+                tt_out = self.bundle.tabular_text.predict(pred_out["feat_df"], pred_out["deflator"])
+                tt_eur = float(tt_out["predicted_eur"][0])
+                vision_shift_eur = round(predicted_eur - tt_eur)
+                vision_shift_pct = round((predicted_eur - tt_eur) / max(tt_eur, 1.0) * 100.0, 1)
+            except Exception:
+                pass
 
         delta_eur = round(predicted_eur - asking_price) if asking_price else None
         delta_pct = round(float((predicted_eur - asking_price) / asking_price * 100.0), 1) if asking_price else None
@@ -343,27 +365,27 @@ class PredictionService:
             cand = str(feat_df["neighbourhood"].iloc[0])
             if cand and cand != "Unknown":
                 nbh = cand
-        if not nbh and row.get("latitude") and row.get("longitude") and self.data_loader:
-            nbh = self.data_loader.get_neighbourhood_spatial(float(row["latitude"]), float(row["longitude"]))
+        if not nbh and clean_row.get("latitude") and clean_row.get("longitude") and self.data_loader:
+            nbh = self.data_loader.get_neighbourhood_spatial(float(clean_row["latitude"]), float(clean_row["longitude"]))
 
-        address_parts = " ".join(p for p in [str(row.get("street") or "").strip(), str(row.get("house_number") or "").strip()] if p)
-        city_parts = " ".join(p for p in [str(row.get("postal_code") or "").strip(), str(row.get("city") or "").strip()] if p)
+        address_parts = " ".join(p for p in [str(clean_row.get("street") or "").strip(), str(clean_row.get("house_number") or "").strip()] if p)
+        city_parts = " ".join(p for p in [str(clean_row.get("postal_code") or "").strip(), str(clean_row.get("city") or "").strip()] if p)
         address = ", ".join(p for p in [address_parts, city_parts] if p)
 
-        has_text = bool((row.get("description") or "").strip() or (row.get("description_nl") or "").strip())
+        has_text = bool((clean_row.get("description") or "").strip() or (clean_row.get("description_nl") or "").strip())
         shap_payload = format_shap_payload(pred_out.get("shap_raw"), is_manual=not has_text)
         result = {
             "property": {
-                "property_id": row.get("property_id"),
+                "property_id": clean_row.get("property_id"),
                 "address": address,
                 "price": asking_price,
-                "livable_area": row.get("livable_area"),
-                "bedrooms": row.get("number_of_bedrooms"),
-                "year_built": row.get("year_built"),
-                "condition": row.get("building_condition"),
-                "energy_label": row.get("energy_label"),
-                "property_type": row.get("property_type"),
-                "property_subtype": row.get("property_subtype"),
+                "livable_area": clean_row.get("livable_area"),
+                "bedrooms": clean_row.get("number_of_bedrooms"),
+                "year_built": clean_row.get("year_built"),
+                "condition": clean_row.get("building_condition"),
+                "energy_label": clean_row.get("energy_label"),
+                "property_type": clean_row.get("property_type"),
+                "property_subtype": clean_row.get("property_subtype"),
                 "neighbourhood": nbh,
             },
             "prediction": {
@@ -380,17 +402,38 @@ class PredictionService:
                 "delta_pct": delta_pct,
                 "track": track_used,
                 "has_photos": has_photos,
+                "n_photos_used": int(vis_bundle.get("n_photos_used", 0)) if (has_photos and vis_bundle) else 0,
+                "vision_source": str(vis_bundle.get("source")) if (has_photos and vis_bundle) else None,
+                "vision_shift_eur": vision_shift_eur,
+                "vision_shift_pct": vision_shift_pct,
                 "model_version": self.bundle.metadata.get("model_version", "phase7-lean5"),
             },
-            "form_data": _clean_form_dict(row),
+            "form_data": _clean_form_dict(clean_row),
             "shap": shap_payload,
         }
 
-        self._add_explainability(result, row)
+        self._add_explainability(result, clean_row)
         return result
 
+    def _extract_live_vision(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
+        """Attempt live SigLIP2+SO400M photo encoding; return None gracefully on any error."""
+        if not self.vision_encoder or not getattr(self.bundle, "multimodal", None):
+            return None
+        pid = parsed.get("property_id")
+        photo_urls = parsed.get("_photo_urls") or []
+        if not pid and not photo_urls:
+            return None
+        try:
+            return self.vision_encoder.extract_for_listing(
+                property_id=str(pid) if pid else None,
+                photo_urls=photo_urls,
+            )
+        except Exception as e:
+            print(f"Live vision fallback to tabular_text ({type(e).__name__}: {e})")
+            return None
+
     def predict_from_url(self, url: str | None):
-        """Fetch Immoweb URL, parse via `src/parser.py`, predict with Phase-7 bundle."""
+        """Fetch Immoweb URL, parse via `src/parser.py`, encode photos if available, predict with Phase-7 bundle."""
         if not url or "immoweb.be" not in url:
             return {"error": "Please enter a valid Immoweb URL"}, 400
         if self.bundle is None:
@@ -399,7 +442,8 @@ class PredictionService:
         try:
             html = self._fetch_page(url)
             parsed = self.parse_immoweb_html(html, url)
-            result = self._score_single_row(parsed)
+            vis_bundle = self._extract_live_vision(parsed)
+            result = self._score_single_row(parsed, vis_bundle=vis_bundle)
             return result, 200
         except requests.exceptions.HTTPError as e:
             if hasattr(e, "response") and e.response is not None and e.response.status_code == 403:
@@ -411,7 +455,7 @@ class PredictionService:
             return {"error": f"{type(e).__name__}: {e}"}, 500
 
     def predict_from_form_data(self, form_data: dict[str, Any] | None):
-        """Predict from edited listing form or manual property details."""
+        """Predict from edited listing form or manual property details (reuses cached vision if property_id matches)."""
         if self.bundle is None:
             return {"error": "Production model bundle not loaded"}, 503
         if not form_data or not isinstance(form_data, dict):
@@ -419,7 +463,15 @@ class PredictionService:
 
         try:
             row = self._normalize_form_row(form_data)
-            result = self._score_single_row(row)
+            # Reuse cached vision embeddings (zero download) if this form came from a scored Immoweb URL
+            vis_bundle = None
+            pid = row.get("property_id")
+            if pid and self.vision_encoder and getattr(self.bundle, "multimodal", None):
+                try:
+                    vis_bundle = self.vision_encoder._lookup_cached(str(pid))
+                except Exception:
+                    vis_bundle = None
+            result = self._score_single_row(row, vis_bundle=vis_bundle)
             return result, 200
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}, 500
