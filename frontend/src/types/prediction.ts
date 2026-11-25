@@ -63,6 +63,32 @@ export interface ShapData {
   features: ShapFeature[];
 }
 
+export interface PropertyRegime {
+  code: string;
+  label: string;
+  flags: string[];
+  is_non_standard: boolean;
+  expected_mdape_pct: number;
+  advisory: string | null;
+}
+
+export interface JepaDiagnostics {
+  verdict: string;
+  verdict_label: string;
+  tone: "positive" | "negative" | "warning" | "neutral";
+  summary: string;
+  dz_quality: number;
+  quality_percentile: number;
+  energy_sym: number;
+  energy_photo: number;
+  energy_text: number;
+  energy_percentile: number;
+  cherry_pick_spread: number;
+  cherry_percentile: number;
+  worst_fixer_gap: number;
+  sub_scores: { axis: string; z: number }[];
+}
+
 export interface PredictionResult {
   property: {
     property_id: string | null;
@@ -76,6 +102,7 @@ export interface PredictionResult {
     property_type: string | null;
     property_subtype: string | null;
     neighbourhood: string | null;
+    regime?: PropertyRegime | null;
   };
   prediction: {
     predicted_price: number;
@@ -95,6 +122,7 @@ export interface PredictionResult {
     vision_source?: string | null;
     vision_shift_eur?: number | null;
     vision_shift_pct?: number | null;
+    jepa?: JepaDiagnostics | null;
     model_version?: string;
   };
   form_data: Record<string, unknown>;

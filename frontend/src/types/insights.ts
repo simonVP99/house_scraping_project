@@ -56,6 +56,7 @@ export interface AgencyAuditRow {
   pct_underpriced_10: number;
   pct_price_cut: number;
   median_duration_days: number;
+  median_jepa_dz?: number | null;
 }
 
 export interface EpcLabelRow {
@@ -109,6 +110,80 @@ export interface MonthlyPoint {
   median_price_sqm: number;
 }
 
+export interface JepaEnergyQuintile {
+  quintile: string;
+  count: number;
+  mdape: number;
+  p80_err: number;
+  pct_price_cut: number;
+  pct_under_option: number;
+  avg_duration_days: number;
+}
+
+export interface JepaExampleListing {
+  property_id: string;
+  url: string;
+  neighbourhood: string;
+  property_type: string;
+  livable_area: number | null;
+  energy_label: string | null;
+  condition: string | null;
+  asking_eur: number;
+  fair_eur: number;
+  vision_shift_pct: number;
+  dz_quality: number;
+  energy_sym: number;
+  had_price_cut: boolean;
+  duration_days: number;
+  title: string | null;
+}
+
+export interface PropertyRegimeRow {
+  code: string;
+  label: string;
+  count: number;
+  median_asking_eur: number;
+  mdape: number;
+  p80_err: number;
+  avg_duration_days: number;
+  median_jepa_energy: number | null;
+}
+
+export interface JepaForensics {
+  n_scored: number;
+  energy_quintiles: JepaEnergyQuintile[];
+  fair_priced_controlled: {
+    count: number;
+    q1_duration_days: number;
+    q5_duration_days: number;
+    q1_price_cut_pct: number;
+    q5_price_cut_pct: number;
+    q1_under_option_pct: number;
+    q5_under_option_pct: number;
+  };
+  condition_honesty: {
+    total_claimed_top: number;
+    bottom15_looks_dated: {
+      count: number;
+      pct_price_cut: number;
+      median_vision_shift_pct: number;
+      avg_duration_days: number;
+    };
+    top15_looks_sharp: {
+      count: number;
+      pct_price_cut: number;
+      median_vision_shift_pct: number;
+      avg_duration_days: number;
+    };
+  };
+  cherry_quintiles: { quintile: string; count: number; mdape: number; p80_err: number }[];
+  regime_breakdown: PropertyRegimeRow[];
+  examples: {
+    overclaimed: JepaExampleListing[];
+    hidden_gems: JepaExampleListing[];
+  };
+}
+
 export interface MarketInsights {
   generated_from: string;
   corpus: {
@@ -135,6 +210,7 @@ export interface MarketInsights {
     pct_shifted_over_5pct: number;
     histogram: { lo: number; hi: number; mid: number; count: number }[];
   };
+  jepa_forensics?: JepaForensics | null;
   error_by_band: ErrorBandRow[];
   monthly_series: MonthlyPoint[];
 }
@@ -198,6 +274,9 @@ export interface DealItem {
   neighbourhood: string | null;
   date_obtained: string | null;
   had_price_cut?: boolean;
+  property_regime?: string | null;
+  jepa_dz_quality?: number | null;
+  jepa_energy_sym?: number | null;
   source: "live" | "corpus_recent" | string;
 }
 

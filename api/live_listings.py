@@ -299,6 +299,9 @@ class LiveListingsService:
                 "neighbourhood_key": sub["neighbourhood"],
                 "date_obtained": sub["_dt"].dt.strftime("%Y-%m-%d") if "_dt" in sub.columns else None,
                 "had_price_cut": sub["had_price_cut"].fillna(False).astype(bool) if "had_price_cut" in sub.columns else False,
+                "property_regime": sub["property_regime"].fillna("residential") if "property_regime" in sub.columns else "residential",
+                "jepa_dz_quality": pd.to_numeric(sub["jepa_dz_quality"], errors="coerce").round(2) if "jepa_dz_quality" in sub.columns else None,
+                "jepa_energy_sym": pd.to_numeric(sub["jepa_energy_sym"], errors="coerce").round(2) if "jepa_energy_sym" in sub.columns else None,
                 "source": "corpus_recent",
             })
 

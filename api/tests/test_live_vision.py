@@ -191,3 +191,54 @@ def test_multimodal_bundle_scores_corpus_cached_listing_end_to_end():
     assert bool(out["has_photos"][0]) is True
     assert 50_000 <= float(out["predicted_eur"][0]) <= 2_500_000
     assert float(out["low_eur"][0]) < float(out["predicted_eur"][0]) < float(out["high_eur"][0])
+
+
+def test_jepa_inspector_and_regime_detector():
+    from jepa_inspector import CrossModalJEPAInspector, DEFAULT_JEPA_PATH, detect_property_regime
+
+    r_mixed = detect_property_regime(
+        property_subtype="HOUSE",
+        title="Handelshuis met winkelruimte op het gelijkvloers",
+    )
+    assert r_mixed["code"] == "mixed_commercial"
+    assert r_mixed["is_non_standard"] is True
+    assert r_mixed["advisory"]
+
+    r_inv = detect_property_regime(
+        property_subtype="HOUSE",
+        description_nl="Ideaal opbrengsteigendom met 4 vergunde studentenkamers en hoog rendement",
+    )
+    assert r_inv["code"] == "multi_unit_investment"
+    assert r_inv["is_non_standard"] is True
+
+    r_res = detect_property_regime(
+        property_subtype="HOUSE",
+        title="Gezellige rijwoning met zonnige stadstuin",
+    )
+    assert r_res["code"] == "residential"
+    assert r_res["is_non_standard"] is False
+    assert r_res["advisory"] is None
+
+    if os.path.exists(DEFAULT_JEPA_PATH) and os.path.exists(OFFLINE_NPZ):
+        insp = CrossModalJEPAInspector.load(DEFAULT_JEPA_PATH)
+        assert insp is not None
+        enc = LiveVisionEncoder(cache_dir="", offline_npz_path=OFFLINE_NPZ, enabled=True)
+        enc._ensure_offline_index()
+        df = pd.read_parquet(DATASET_PATH)
+        pid = next(str(p) for p in df["property_id"].head(50) if enc._lookup_cached(str(p)) is not None)
+        vis = enc._lookup_cached(pid)
+        diag = insp.score_single(
+            feat_df=pd.DataFrame([{"livable_area": 140.0, "epc_ordinal": 2.0}]),
+            e5_vec=None,
+            vis_bundle=vis,
+            claimed_condition="AS_NEW",
+            delta_pct=8.0,
+        )
+        assert diag is not None
+        assert diag["verdict"] in {
+            "overclaimed_condition", "hidden_gem", "exceeds_specs",
+            "high_contradiction", "cherry_picked", "better_than_fixer", "consistent",
+        }
+        assert 0.0 <= diag["quality_percentile"] <= 100.0
+        assert 0.0 <= diag["energy_percentile"] <= 100.0
+        assert len(diag["sub_scores"]) == 7

@@ -209,6 +209,48 @@ def main() -> None:
     df["agency_clean"] = _canonicalize_agencies(df["immo_office_name"])
     df["property_type_label"] = np.where(df.get("property_type_HOUSE", 0) == 1, "House", "Apartment")
 
+    # 2b. Attach Cross-Modal JEPA OOF diagnostics & mixed-use / investment regime tags
+    jepa_oof_path = WORK_DIR / "issue10_jepa_oof.parquet"
+    if jepa_oof_path.exists():
+        j_oof = pd.read_parquet(jepa_oof_path)
+        if len(j_oof) == len(df):
+            df["jepa_dz_quality"] = j_oof["jepa_dz_quality_index"].to_numpy(dtype=float)
+            df["jepa_energy_sym"] = j_oof["jepa_energy_sym"].to_numpy(dtype=float)
+            df["jepa_cherry_spread"] = j_oof["jepa_cherry_pick_spread"].to_numpy(dtype=float)
+            df["jepa_has_vis"] = j_oof["normal_vis"].to_numpy(dtype=bool)
+        else:
+            df["jepa_dz_quality"] = np.nan
+            df["jepa_energy_sym"] = np.nan
+            df["jepa_cherry_spread"] = np.nan
+            df["jepa_has_vis"] = False
+    else:
+        df["jepa_dz_quality"] = np.nan
+        df["jepa_energy_sym"] = np.nan
+        df["jepa_cherry_spread"] = np.nan
+        df["jepa_has_vis"] = False
+
+    # Attach raw title/description for mixed-use / investment regime detection
+    raw_txt = pd.read_parquet(
+        RAW_PARQUET,
+        columns=["property_id", "title", "description_nl", "description"],
+    )
+    raw_txt["pid"] = raw_txt["property_id"].astype(str)
+    raw_txt = raw_txt.drop_duplicates(subset=["pid"], keep="last")
+    df = df.merge(raw_txt[["pid", "title", "description_nl", "description"]], on="pid", how="left")
+    from jepa_inspector import detect_property_regime
+    regimes = [
+        detect_property_regime(
+            property_subtype=st, title=ti, description=ds, description_nl=dnl
+        )["code"]
+        for st, ti, ds, dnl in zip(
+            df.get("property_subtype", pd.Series("", index=df.index)),
+            df["title"].fillna(""),
+            df["description"].fillna(""),
+            df["description_nl"].fillna(""),
+        )
+    ]
+    df["property_regime"] = regimes
+
     # 3. Save compact oof_analytics.parquet for DataLoader
     keep_cols = [
         "property_id", "date_obtained", "publication_year", "publication_month",
@@ -217,6 +259,7 @@ def main() -> None:
         "price_per_sqm", "pred_price_per_sqm",
         "livable_area", "property_size", "number_of_bedrooms", "number_of_bathrooms",
         "property_type_HOUSE", "property_type_APARTMENT", "property_type_label", "property_subtype",
+        "property_regime",
         "building_condition", "energy_label", "primary_energy_consumption", "year_built", "age",
         "has_garden", "garden_surface", "has_terrace", "terrace_surface",
         "has_lift", "has_double_glazing", "has_photovoltaic_panels", "has_heat_pump",
@@ -225,6 +268,7 @@ def main() -> None:
         "statbel_sector", "dist_from_center", "street_type",
         "listing_duration_days", "is_under_option", "had_price_cut", "price_cut_eur", "price_cut_pct",
         "agency_clean", "n_snapshots",
+        "jepa_dz_quality", "jepa_energy_sym", "jepa_cherry_spread",
     ]
     keep_cols = [c for c in keep_cols if c in df.columns]
     out_parquet = PROD_DIR / "oof_analytics.parquet"
@@ -248,6 +292,7 @@ def main() -> None:
             pct_underpriced_10=("asking_premium_pct", lambda s: float((s <= -10).mean() * 100)),
             pct_price_cut=("had_price_cut", lambda s: float(s.mean() * 100)),
             median_duration_days=("listing_duration_days", "median"),
+            median_jepa_dz=("jepa_dz_quality", "median"),
         )
         .reset_index()
     )
@@ -263,6 +308,7 @@ def main() -> None:
             "pct_underpriced_10": round(float(r["pct_underpriced_10"]), 1),
             "pct_price_cut": round(float(r["pct_price_cut"]), 1),
             "median_duration_days": int(round(r["median_duration_days"])),
+            "median_jepa_dz": round(float(r["median_jepa_dz"]), 2) if pd.notna(r["median_jepa_dz"]) else None,
         }
         for _, r in ag_stats.iterrows()
     ]
@@ -442,6 +488,152 @@ def main() -> None:
         if int(r["listings"]) >= 15
     ]
 
+    # 4i. Cross-Modal JEPA Photo-vs-Specs Forensics & Property Regime Breakdown
+    jepa_forensics = None
+    j_sub = normal_df[normal_df["jepa_has_vis"] & normal_df["jepa_energy_sym"].notna()].copy()
+    if len(j_sub) >= 500:
+        j_sub["abs_err_pct"] = np.abs(j_sub["pred_mm_eur"] - j_sub["price"]) / np.maximum(j_sub["price"], 1.0) * 100.0
+        j_sub["e_q"] = pd.qcut(
+            j_sub["jepa_energy_sym"], 5,
+            labels=["Q1 · Match", "Q2", "Q3", "Q4", "Q5 · Contradiction"],
+        )
+        energy_quintiles = []
+        for q, g in j_sub.groupby("e_q", observed=True):
+            energy_quintiles.append({
+                "quintile": str(q),
+                "count": int(len(g)),
+                "mdape": round(float(g["abs_err_pct"].median()), 2),
+                "p80_err": round(float(g["abs_err_pct"].quantile(0.80)), 2),
+                "pct_price_cut": round(float(g["had_price_cut"].mean() * 100.0), 2),
+                "pct_under_option": round(float(g["is_under_option"].mean() * 100.0), 1),
+                "avg_duration_days": round(float(g["listing_duration_days"].mean()), 1),
+            })
+
+        # Controlled check on fairly priced listings (-5%..+5%)
+        fair_j = j_sub[j_sub["asking_premium_pct"].between(-5.0, 5.0)]
+        fq1 = fair_j[fair_j["jepa_energy_sym"] <= fair_j["jepa_energy_sym"].quantile(0.20)]
+        fq5 = fair_j[fair_j["jepa_energy_sym"] >= fair_j["jepa_energy_sym"].quantile(0.80)]
+        fair_controlled = {
+            "count": int(len(fair_j)),
+            "q1_duration_days": round(float(fq1["listing_duration_days"].mean()), 1),
+            "q5_duration_days": round(float(fq5["listing_duration_days"].mean()), 1),
+            "q1_price_cut_pct": round(float(fq1["had_price_cut"].mean() * 100.0), 2),
+            "q5_price_cut_pct": round(float(fq5["had_price_cut"].mean() * 100.0), 2),
+            "q1_under_option_pct": round(float(fq1["is_under_option"].mean() * 100.0), 1),
+            "q5_under_option_pct": round(float(fq5["is_under_option"].mean() * 100.0), 1),
+        }
+
+        # Condition Claim Honesty among AS_NEW / JUST_RENOVATED
+        claimed_hi = j_sub[j_sub["building_condition"].isin(["AS_NEW", "JUST_RENOVATED"])]
+        lo_c = claimed_hi[claimed_hi["jepa_dz_quality"] <= claimed_hi["jepa_dz_quality"].quantile(0.15)]
+        hi_c = claimed_hi[claimed_hi["jepa_dz_quality"] >= claimed_hi["jepa_dz_quality"].quantile(0.85)]
+        condition_honesty = {
+            "total_claimed_top": int(len(claimed_hi)),
+            "bottom15_looks_dated": {
+                "count": int(len(lo_c)),
+                "pct_price_cut": round(float(lo_c["had_price_cut"].mean() * 100.0), 2),
+                "median_vision_shift_pct": round(float(lo_c["vision_delta_pct"].median()), 2),
+                "avg_duration_days": round(float(lo_c["listing_duration_days"].mean()), 1),
+            },
+            "top15_looks_sharp": {
+                "count": int(len(hi_c)),
+                "pct_price_cut": round(float(hi_c["had_price_cut"].mean() * 100.0), 2),
+                "median_vision_shift_pct": round(float(hi_c["vision_delta_pct"].median()), 2),
+                "avg_duration_days": round(float(hi_c["listing_duration_days"].mean()), 1),
+            },
+        }
+
+        # Cherry-picking quintiles
+        j_sub["cp_q"] = pd.qcut(
+            j_sub["jepa_cherry_spread"], 5,
+            labels=["Q1 · Consistent", "Q2", "Q3", "Q4", "Q5 · Cherry-picked"],
+        )
+        cherry_quintiles = [
+            {
+                "quintile": str(q),
+                "count": int(len(g)),
+                "mdape": round(float(g["abs_err_pct"].median()), 2),
+                "p80_err": round(float(g["abs_err_pct"].quantile(0.80)), 2),
+            }
+            for q, g in j_sub.groupby("cp_q", observed=True)
+        ]
+
+        # Showcase real concrete examples (Over-claimed vs Hidden Gems)
+        def _example_row(r):
+            pid = str(r["property_id"])
+            return {
+                "property_id": pid,
+                "url": f"https://www.immoweb.be/nl/zoekertje/property/te-koop/gent/{r.get('postal_code') or '9000'}/{pid}",
+                "neighbourhood": str(r["neighbourhood_display"]),
+                "property_type": str(r["property_type_label"]),
+                "livable_area": int(round(float(r["livable_area"]))) if pd.notna(r["livable_area"]) else None,
+                "energy_label": str(r["energy_label"]) if pd.notna(r["energy_label"]) else None,
+                "condition": str(r["building_condition"]) if pd.notna(r["building_condition"]) else None,
+                "asking_eur": int(round(float(r["price"]))),
+                "fair_eur": int(round(float(r["pred_mm_eur"]))),
+                "vision_shift_pct": round(float(r["vision_delta_pct"]), 1),
+                "dz_quality": round(float(r["jepa_dz_quality"]), 2),
+                "energy_sym": round(float(r["jepa_energy_sym"]), 2),
+                "had_price_cut": bool(r["had_price_cut"]),
+                "duration_days": int(round(float(r["listing_duration_days"]))),
+                "title": str(r["title"])[:75] if pd.notna(r["title"]) and str(r["title"]).strip() else None,
+            }
+
+        overclaimed_ex = (
+            claimed_hi.drop_duplicates(subset=["neighbourhood", "price", "livable_area"])
+            .nsmallest(6, "jepa_dz_quality")
+        )
+        hidden_gems_ex = (
+            j_sub[
+                j_sub["building_condition"].isin(["GOOD", "TO_BE_DONE_UP", "TO_RENOVATE"])
+                & (j_sub["delta_pct"] >= 6.0)
+                & (j_sub["vision_delta_pct"] >= 3.0)
+            ]
+            .drop_duplicates(subset=["neighbourhood", "price", "livable_area"])
+            .nlargest(6, "jepa_dz_quality")
+        )
+
+        # Property regime breakdown (Residential vs Mixed-Use Commercial vs Multi-Unit Investment)
+        regime_labels = {
+            "residential": "Standard Residential",
+            "mixed_commercial": "Mixed-Use / Store (Handelspand)",
+            "live_work": "Live-Work / Practice (Praktijk)",
+            "multi_unit_investment": "Multi-Unit / Opbrengsteigendom",
+            "rented_yield": "Currently Rented / Yield Pitch",
+            "student_kot": "Student Kot",
+            "service_flat": "Service Flat / Assisted Living",
+        }
+        df_err = df.copy()
+        df_err["abs_err_pct"] = np.abs(df_err["pred_mm_eur"] - df_err["price"]) / np.maximum(df_err["price"], 1.0) * 100.0
+        regime_breakdown = []
+        for code, label in regime_labels.items():
+            g = df_err[df_err["property_regime"] == code]
+            if len(g) < 15:
+                continue
+            regime_breakdown.append({
+                "code": code,
+                "label": label,
+                "count": int(len(g)),
+                "median_asking_eur": int(round(float(g["price"].median()))),
+                "mdape": round(float(g["abs_err_pct"].median()), 2),
+                "p80_err": round(float(g["abs_err_pct"].quantile(0.80)), 2),
+                "avg_duration_days": round(float(g["listing_duration_days"].mean()), 1),
+                "median_jepa_energy": round(float(g["jepa_energy_sym"].median()), 3) if g["jepa_energy_sym"].notna().any() else None,
+            })
+
+        jepa_forensics = {
+            "n_scored": int(len(j_sub)),
+            "energy_quintiles": energy_quintiles,
+            "fair_priced_controlled": fair_controlled,
+            "condition_honesty": condition_honesty,
+            "cherry_quintiles": cherry_quintiles,
+            "regime_breakdown": regime_breakdown,
+            "examples": {
+                "overclaimed": [_example_row(r) for _, r in overclaimed_ex.iterrows()],
+                "hidden_gems": [_example_row(r) for _, r in hidden_gems_ex.iterrows()],
+            },
+        }
+
     insights = {
         "generated_from": meta.get("model_version", "phase7-lean5"),
         "corpus": {
@@ -460,6 +652,7 @@ def main() -> None:
         "condition_ladder": condition_ladder,
         "overpricing_forensics": overpricing_forensics,
         "vision_impact": vision_impact,
+        "jepa_forensics": jepa_forensics,
         "error_by_band": error_by_band,
         "neighbourhood_profiles": nbh_profiles,
         "monthly_series": monthly_series,

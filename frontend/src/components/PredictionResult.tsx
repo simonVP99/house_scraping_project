@@ -159,6 +159,98 @@ export default function PredictionResultCard({
         </div>
       </section>
 
+      {/* Property Regime Advisory (Mixed-Use Commercial / Investment / Live-Work) */}
+      {property.regime?.advisory && (
+        <div className="rounded-xl border border-warning/35 bg-warning/8 px-4 py-3 text-xs text-foreground flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <span className="font-semibold text-warning uppercase tracking-wider text-[11px] mr-2">
+              {property.regime.label}
+            </span>
+            <span className="text-muted-foreground">{property.regime.advisory}</span>
+          </div>
+          <span className="shrink-0 text-[11px] font-medium text-muted-foreground tabular-nums">
+            Segment MdAPE ~{property.regime.expected_mdape_pct}%
+          </span>
+        </div>
+      )}
+
+      {/* Cross-Modal JEPA Photo-vs-Specs Honesty Card (when photos ran) */}
+      {prediction.jepa && (
+        <section
+          className={`rounded-xl border p-5 space-y-3 ${
+            prediction.jepa.tone === "positive"
+              ? "border-positive/30 bg-positive/5"
+              : prediction.jepa.tone === "negative"
+                ? "border-negative/30 bg-negative/5"
+                : prediction.jepa.tone === "warning"
+                  ? "border-warning/35 bg-warning/8"
+                  : "border-border bg-card"
+          }`}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  Cross-Modal JEPA Photo Audit
+                </span>
+                <span
+                  className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
+                    prediction.jepa.tone === "positive"
+                      ? "bg-positive/15 text-positive border-positive/30"
+                      : prediction.jepa.tone === "negative"
+                        ? "bg-negative/15 text-negative border-negative/30"
+                        : prediction.jepa.tone === "warning"
+                          ? "bg-warning/15 text-warning border-warning/30"
+                          : "bg-muted text-foreground border-border"
+                  }`}
+                >
+                  {prediction.jepa.verdict_label}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground max-w-3xl leading-relaxed">
+                {prediction.jepa.summary}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-3 text-xs tabular-nums">
+              <div className="rounded-lg bg-background/80 border border-border px-3 py-1.5 text-center">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Visual Surprise</p>
+                <p className="font-semibold text-foreground">
+                  {prediction.jepa.dz_quality > 0 ? "+" : ""}{prediction.jepa.dz_quality.toFixed(2)}σ{" "}
+                  <span className="text-muted-foreground font-normal">({Math.round(prediction.jepa.quality_percentile)}th)</span>
+                </p>
+              </div>
+              <div className="rounded-lg bg-background/80 border border-border px-3 py-1.5 text-center">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Contradiction E</p>
+                <p className="font-semibold text-foreground">
+                  {prediction.jepa.energy_sym.toFixed(2)}{" "}
+                  <span className="text-muted-foreground font-normal">({Math.round(prediction.jepa.energy_percentile)}th)</span>
+                </p>
+              </div>
+              <div className="rounded-lg bg-background/80 border border-border px-3 py-1.5 text-center">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Room Spread</p>
+                <p className="font-semibold text-foreground">{Math.round(prediction.jepa.cherry_percentile)}th pct</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 pt-1">
+            {prediction.jepa.sub_scores.map((s) => (
+              <div key={s.axis} className="rounded-md bg-background/70 border border-border/70 px-2.5 py-1.5 text-center">
+                <p className="text-[10px] text-muted-foreground truncate">{s.axis}</p>
+                <p
+                  className={`text-xs font-semibold tabular-nums ${
+                    s.z >= 0.45 ? "text-positive" : s.z <= -0.45 ? "text-negative" : "text-foreground"
+                  }`}
+                >
+                  {s.z > 0 ? "+" : ""}{s.z.toFixed(2)}σ
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Visual Conformal Interval Gauge */}
       {hasBand && (
         <ConformalBandGauge

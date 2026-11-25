@@ -18,6 +18,7 @@ if _SRC_DIR not in sys.path:
 
 from parser import build_row, extract_classified_json  # noqa: E402
 from live_vision import LiveVisionEncoder, extract_photo_urls_from_classified  # noqa: E402
+from jepa_inspector import CrossModalJEPAInspector, DEFAULT_JEPA_PATH, detect_property_regime  # noqa: E402
 
 
 SHAP_LABEL_MAP = {
@@ -238,10 +239,23 @@ def _clean_form_dict(d: dict[str, Any]) -> dict[str, Any]:
 class PredictionService:
     """Unified prediction service backed by the Phase-7 Lean-5 `ProductionBundle`."""
 
-    def __init__(self, bundle=None, data_loader=None, vision_encoder: LiveVisionEncoder | None = None):
+    def __init__(
+        self,
+        bundle=None,
+        data_loader=None,
+        vision_encoder: LiveVisionEncoder | None = None,
+        jepa_inspector: CrossModalJEPAInspector | None = None,
+    ):
         self.bundle = bundle
         self.data_loader = data_loader
         self.vision_encoder = vision_encoder if vision_encoder is not None else LiveVisionEncoder()
+        if jepa_inspector is not None:
+            self.jepa_inspector = jepa_inspector
+        else:
+            try:
+                self.jepa_inspector = CrossModalJEPAInspector.load(DEFAULT_JEPA_PATH)
+            except Exception:
+                self.jepa_inspector = None
 
     @staticmethod
     def parse_immoweb_html(html: str, url: str | None = None) -> dict[str, Any]:
@@ -374,6 +388,34 @@ class PredictionService:
 
         has_text = bool((clean_row.get("description") or "").strip() or (clean_row.get("description_nl") or "").strip())
         shap_payload = format_shap_payload(pred_out.get("shap_raw"), is_manual=not has_text)
+
+        # Cross-Modal JEPA Photo-vs-Specs Honesty diagnostics (when photos ran)
+        jepa_diag = None
+        if has_photos and vis_bundle is not None and self.jepa_inspector is not None:
+            try:
+                e5_vec = None
+                if has_text and getattr(self.bundle, "e5_encoder", None) is not None:
+                    from production_pipeline import build_text_strings
+                    texts = build_text_strings(raw_df)
+                    e5_vec = self.bundle.e5_encoder.encode(texts)[0]
+                jepa_diag = self.jepa_inspector.score_single(
+                    feat_df=feat_df,
+                    e5_vec=e5_vec,
+                    vis_bundle=vis_bundle,
+                    claimed_condition=clean_row.get("building_condition"),
+                    delta_pct=delta_pct,
+                )
+            except Exception:
+                jepa_diag = None
+
+        # Detect non-standard commercial / mixed-use / investment property regimes
+        property_regime = detect_property_regime(
+            property_subtype=clean_row.get("property_subtype"),
+            title=clean_row.get("title"),
+            description=clean_row.get("description"),
+            description_nl=clean_row.get("description_nl"),
+        )
+
         result = {
             "property": {
                 "property_id": clean_row.get("property_id"),
@@ -387,6 +429,7 @@ class PredictionService:
                 "property_type": clean_row.get("property_type"),
                 "property_subtype": clean_row.get("property_subtype"),
                 "neighbourhood": nbh,
+                "regime": property_regime,
             },
             "prediction": {
                 "predicted_price": round(predicted_eur),
@@ -406,6 +449,7 @@ class PredictionService:
                 "vision_source": str(vis_bundle.get("source")) if (has_photos and vis_bundle) else None,
                 "vision_shift_eur": vision_shift_eur,
                 "vision_shift_pct": vision_shift_pct,
+                "jepa": jepa_diag,
                 "model_version": self.bundle.metadata.get("model_version", "phase7-lean5"),
             },
             "form_data": _clean_form_dict(clean_row),

@@ -12,18 +12,20 @@ import {
   ComposedChart,
   Line,
 } from "recharts";
+import { ExternalLink } from "lucide-react";
 import { useMarketInsights } from "../hooks/useInsights";
 import EdaPage from "./EdaPage";
 import type { MarketInsights } from "../types/insights";
-import { formatEur, formatEurCompact, formatPsm, formatPctSigned } from "../lib/format";
+import { formatCondition, formatEur, formatEurCompact, formatPsm, formatPctSigned } from "../lib/format";
 
-type TopTab = "model" | "agencies" | "epc" | "forensics" | "dataset";
+type TopTab = "model" | "agencies" | "epc" | "forensics" | "jepa" | "dataset";
 
 const TOP_TABS: { key: TopTab; label: string }[] = [
   { key: "model", label: "Phase-7 Model Lab" },
   { key: "agencies", label: "Agency Pricing Audit" },
   { key: "epc", label: "EPC & Renovation Cliff" },
   { key: "forensics", label: "Overpricing & Vision" },
+  { key: "jepa", label: "JEPA Photo Honesty & Regimes" },
   { key: "dataset", label: "Full Dataset EDA (145k)" },
 ];
 
@@ -117,6 +119,7 @@ export default function InsightsPage() {
           {tab === "agencies" && <AgencyAuditTab data={insights} />}
           {tab === "epc" && <EpcCliffTab data={insights} />}
           {tab === "forensics" && <ForensicsTab data={insights} />}
+          {tab === "jepa" && <JepaLabTab data={insights} />}
         </>
       )}
     </div>
@@ -347,6 +350,7 @@ function AgencyAuditTab({ data }: { data: MarketInsights }) {
                 <th className="text-right px-3 py-2.5 font-medium">Median Premium</th>
                 <th className="text-right px-3 py-2.5 font-medium">&gt;10% Over</th>
                 <th className="text-right px-3 py-2.5 font-medium">Price Cuts</th>
+                <th className="text-right px-3 py-2.5 font-medium" title="Cross-Modal JEPA median Δz_quality: positive = photos exceed specs, negative = photos look rougher than claimed specs">Photo Δz</th>
                 <th className="text-right px-4 py-2.5 font-medium">Med. Stay</th>
               </tr>
             </thead>
@@ -362,6 +366,17 @@ function AgencyAuditTab({ data }: { data: MarketInsights }) {
                   </td>
                   <td className="px-3 py-2 text-right text-muted-foreground">{a.pct_overpriced_10.toFixed(1)}%</td>
                   <td className="px-3 py-2 text-right text-muted-foreground">{a.pct_price_cut.toFixed(1)}%</td>
+                  <td
+                    className={`px-3 py-2 text-right font-medium ${
+                      (a.median_jepa_dz ?? 0) >= 0.2
+                        ? "text-positive"
+                        : (a.median_jepa_dz ?? 0) <= -0.25
+                          ? "text-negative"
+                          : "text-muted-foreground"
+                    }`}
+                  >
+                    {a.median_jepa_dz != null ? `${a.median_jepa_dz > 0 ? "+" : ""}${a.median_jepa_dz.toFixed(2)}` : "—"}
+                  </td>
                   <td className="px-4 py-2 text-right text-muted-foreground">{a.median_duration_days}d</td>
                 </tr>
               ))}
@@ -559,6 +574,274 @@ function ForensicsTab({ data }: { data: MarketInsights }) {
             </Bar>
           </BarChart>
         </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* 5. Cross-Modal JEPA Photo Honesty & Mixed-Use/Investment Regimes Tab       */
+/* -------------------------------------------------------------------------- */
+function JepaLabTab({ data }: { data: MarketInsights }) {
+  const jepa = data.jepa_forensics;
+  if (!jepa) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+        Cross-Modal JEPA forensics not built yet. Run{" "}
+        <code className="text-foreground">PYTHONPATH=src .venv-api/bin/python -u src/research_cross_modal_jepa.py</code>{" "}
+        followed by <code className="text-foreground">src/build_market_insights.py</code>.
+      </div>
+    );
+  }
+
+  const fair = jepa.fair_priced_controlled;
+  const hon = jepa.condition_honesty;
+
+  return (
+    <div className="space-y-6">
+      {/* Intro Banner */}
+      <div className="rounded-xl border border-primary/25 bg-primary/5 p-5 space-y-2">
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-primary">
+          Cross-Modal JEPA Latent-Residual Surprise · n = {jepa.n_scored.toLocaleString()} Ghent Homes
+        </p>
+        <h3 className="font-display text-xl font-semibold text-foreground">
+          Predicting what a listing&apos;s photos <em>should</em> look like from its specs — then measuring the surprise
+        </h3>
+        <p className="text-xs text-muted-foreground leading-relaxed max-w-4xl">
+          Instead of scoring photos in isolation, a strictly fold-safe predictor{" "}
+          <code className="text-foreground font-mono">f(Tabular + Spatial + Text) → ẑ_photo</code> estimates the expected
+          SigLIP2 + SO400M embedding of a Ghent home with those exact specs, while the reverse predictor{" "}
+          <code className="text-foreground font-mono">g(Specs + Photo) → ẑ_text</code> checks description consistency.
+          The residual <code className="text-foreground font-mono">Δz = z_actual − ẑ_expected</code> isolates pure visual
+          honesty and photo-vs-specs contradiction.
+        </p>
+      </div>
+
+      {/* Headline Controlled Findings */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="rounded-xl border border-border bg-card p-5 space-y-1.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Fairly Priced (±5%) · High vs Low Energy
+          </p>
+          <p className="font-display text-2xl font-bold tabular-nums text-foreground">
+            {fair.q1_duration_days}d → <span className="text-negative">{fair.q5_duration_days}d</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Even when asking price is fair (n={fair.count.toLocaleString()}), high photo-vs-specs contradiction
+            sits <strong>+{(fair.q5_duration_days - fair.q1_duration_days).toFixed(1)} days longer</strong> and has{" "}
+            <strong>{(fair.q5_price_cut_pct / Math.max(fair.q1_price_cut_pct, 0.1)).toFixed(1)}×</strong> the price-cut rate
+            ({fair.q1_price_cut_pct}% → {fair.q5_price_cut_pct}%).
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-5 space-y-1.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Condition Honesty (Claimed As New / Renovated)
+          </p>
+          <p className="font-display text-2xl font-bold tabular-nums text-foreground">
+            {hon.top15_looks_sharp.pct_price_cut}% vs{" "}
+            <span className="text-negative">{hon.bottom15_looks_dated.pct_price_cut}% cuts</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Among {hon.total_claimed_top.toLocaleString()} top-condition listings, the bottom 15% by{" "}
+            <code className="text-foreground">Δz_quality</code> get{" "}
+            <strong>{hon.bottom15_looks_dated.median_vision_shift_pct}%</strong> visual penalty (vs{" "}
+            <strong>+{hon.top15_looks_sharp.median_vision_shift_pct}%</strong>) and{" "}
+            <strong>2×</strong> as many price cuts.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-5 space-y-1.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Intra-Listing Room Cherry-Picking
+          </p>
+          <p className="font-display text-2xl font-bold tabular-nums text-foreground">
+            {jepa.cherry_quintiles[0]?.mdape}% →{" "}
+            <span className="text-warning">{jepa.cherry_quintiles[jepa.cherry_quintiles.length - 1]?.mdape}%</span> MdAPE
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Listings with the widest gap between best photo finish and worst room shown carry{" "}
+            <strong>+{(
+              (jepa.cherry_quintiles[jepa.cherry_quintiles.length - 1]?.mdape ?? 0) -
+              (jepa.cherry_quintiles[0]?.mdape ?? 0)
+            ).toFixed(2)} pt</strong> higher valuation uncertainty.
+          </p>
+        </div>
+      </div>
+
+      {/* Charts row: Energy Quintiles (Duration/Cuts & Error) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="rounded-xl border border-border bg-card p-5 space-y-3">
+          <div>
+            <h3 className="font-display text-lg font-semibold">Contradiction Energy vs Market Friction</h3>
+            <p className="text-xs text-muted-foreground">
+              Bars: average days on market · Line: price-cut rate (%) across Symmetric JEPA Energy quintiles
+            </p>
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={jepa.energy_quintiles} margin={{ top: 10, right: 16, left: 0, bottom: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e4ddd5" vertical={false} />
+              <XAxis dataKey="quintile" tick={{ fontSize: 11, fill: "#5f554c" }} />
+              <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#7a6f66" }} unit="d" />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#7a6f66" }} unit="%" />
+              <Tooltip contentStyle={{ backgroundColor: "#faf8f5", border: "1px solid #d6cdc4", borderRadius: 8, fontSize: 12 }} />
+              <Bar yAxisId="left" dataKey="avg_duration_days" name="Avg stay (days)" fill={C_PRIMARY} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              <Line yAxisId="right" type="monotone" dataKey="pct_price_cut" name="Price cut rate (%)" stroke={C_NEGATIVE} strokeWidth={2.5} dot={{ r: 4 }} isAnimationActive={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-5 space-y-3">
+          <div>
+            <h3 className="font-display text-lg font-semibold">Contradiction Energy vs Valuation Uncertainty</h3>
+            <p className="text-xs text-muted-foreground">
+              P80 absolute error (%) and MdAPE (%) rise monotonically when photos diverge from specs
+            </p>
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={jepa.energy_quintiles} margin={{ top: 10, right: 16, left: 0, bottom: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e4ddd5" vertical={false} />
+              <XAxis dataKey="quintile" tick={{ fontSize: 11, fill: "#5f554c" }} />
+              <YAxis tick={{ fontSize: 11, fill: "#7a6f66" }} unit="%" />
+              <Tooltip contentStyle={{ backgroundColor: "#faf8f5", border: "1px solid #d6cdc4", borderRadius: 8, fontSize: 12 }} />
+              <Bar dataKey="p80_err" name="P80 Abs Error (%)" fill={C_WARN} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              <Line type="monotone" dataKey="mdape" name="MdAPE (%)" stroke={C_PRIMARY} strokeWidth={2.5} dot={{ r: 4 }} isAnimationActive={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Concrete Real Ghent Case Studies: Over-Claimed vs Hidden Gems */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="rounded-xl border border-negative/25 bg-card overflow-hidden">
+          <div className="p-4 border-b border-border bg-negative/5">
+            <h3 className="font-display text-base font-semibold text-negative">
+              Flagged: Claimed &ldquo;As New / Renovated&rdquo; · Photos Look Dated
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Lowest <code className="text-foreground">Δz_quality</code> among top-condition listings — inspect finishes closely
+            </p>
+          </div>
+          <div className="divide-y divide-border/60">
+            {jepa.examples.overclaimed.map((ex) => (
+              <div key={ex.property_id} className="p-3.5 flex items-center justify-between gap-3 text-xs">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-semibold text-foreground">{ex.neighbourhood}</span>
+                    <span className="px-1.5 py-0.5 rounded bg-negative/10 text-negative font-semibold tabular-nums">
+                      Δz {ex.dz_quality.toFixed(2)}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground tabular-nums">
+                      vis {formatPctSigned(ex.vision_shift_pct)}
+                    </span>
+                    {ex.had_price_cut && (
+                      <span className="px-1.5 py-0.5 rounded bg-warning/15 text-warning font-semibold">Cut</span>
+                    )}
+                  </div>
+                  <p className="text-muted-foreground mt-0.5 truncate">
+                    {ex.property_type} · {ex.livable_area} m² · EPC {ex.energy_label ?? "?"} · Claimed {formatCondition(ex.condition)}
+                    {ex.title ? ` — ${ex.title}` : ""}
+                  </p>
+                </div>
+                <div className="text-right shrink-0 tabular-nums">
+                  <p className="font-semibold text-foreground">{formatEurCompact(ex.asking_eur)}</p>
+                  <a href={ex.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
+                    #{ex.property_id} <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-positive/25 bg-card overflow-hidden">
+          <div className="p-4 border-b border-border bg-positive/5">
+            <h3 className="font-display text-base font-semibold text-positive">
+              Flagged: Visual Hidden Gems (Photos Outperform Specs)
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Listed as Good / To Refresh / To Renovate, priced below fair value, yet highest <code className="text-foreground">Δz_quality</code>
+            </p>
+          </div>
+          <div className="divide-y divide-border/60">
+            {jepa.examples.hidden_gems.map((ex) => (
+              <div key={ex.property_id} className="p-3.5 flex items-center justify-between gap-3 text-xs">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-semibold text-foreground">{ex.neighbourhood}</span>
+                    <span className="px-1.5 py-0.5 rounded bg-positive/10 text-positive font-semibold tabular-nums">
+                      Δz +{ex.dz_quality.toFixed(2)}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-positive/10 text-positive tabular-nums">
+                      vis {formatPctSigned(ex.vision_shift_pct)}
+                    </span>
+                  </div>
+                  <p className="text-muted-foreground mt-0.5 truncate">
+                    {ex.property_type} · {ex.livable_area} m² · EPC {ex.energy_label ?? "?"} · Claimed {formatCondition(ex.condition)}
+                  </p>
+                </div>
+                <div className="text-right shrink-0 tabular-nums">
+                  <p className="font-semibold text-foreground">
+                    {formatEurCompact(ex.asking_eur)} → <span className="text-positive">{formatEurCompact(ex.fair_eur)}</span>
+                  </p>
+                  <a href={ex.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
+                    #{ex.property_id} <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Mixed-Use / Store / Investment Regime Performance Table */}
+      <div className="rounded-xl border border-border bg-card overflow-hidden">
+        <div className="p-5 border-b border-border">
+          <h3 className="font-display text-lg font-semibold">
+            How Phase-7 Handles Mixed-Use, Store-Attached &amp; Investment Properties
+          </h3>
+          <p className="text-xs text-muted-foreground mt-1 max-w-4xl">
+            Immoweb often tags a house with a ground-floor shop (<em>handelspand</em>), practice space (<em>praktijkruimte</em>),
+            or multi-unit rental (<em>opbrengsteigendom</em>) as a standard <code className="text-foreground">HOUSE</code>.
+            Phase-7 still prices them with low bias using text + vision cues, but valuation spread is systematically wider
+            (~8.5–14% MdAPE vs 7.2% pure residential) — so live predictions now display an explicit regime advisory.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/60 border-b border-border text-xs text-muted-foreground">
+              <tr>
+                <th className="text-left px-4 py-2.5 font-medium">Property Regime</th>
+                <th className="text-right px-3 py-2.5 font-medium">Listings</th>
+                <th className="text-right px-3 py-2.5 font-medium">Median Ask</th>
+                <th className="text-right px-3 py-2.5 font-medium">Phase-7 MdAPE</th>
+                <th className="text-right px-3 py-2.5 font-medium">P80 Error</th>
+                <th className="text-right px-3 py-2.5 font-medium">Avg Stay</th>
+                <th className="text-right px-4 py-2.5 font-medium">Med. JEPA Energy</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/60 tabular-nums">
+              {jepa.regime_breakdown.map((r) => {
+                const isStd = r.code === "residential";
+                return (
+                  <tr key={r.code} className={isStd ? "bg-primary/5 font-medium" : "hover:bg-muted/40"}>
+                    <td className="px-4 py-2.5 text-foreground">{r.label}</td>
+                    <td className="px-3 py-2.5 text-right text-muted-foreground">{r.count.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right">{formatEurCompact(r.median_asking_eur)}</td>
+                    <td className={`px-3 py-2.5 text-right font-semibold ${r.mdape >= 9 ? "text-negative" : r.mdape >= 8 ? "text-warning" : "text-positive"}`}>
+                      {r.mdape.toFixed(2)}%
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-muted-foreground">{r.p80_err.toFixed(1)}%</td>
+                    <td className="px-3 py-2.5 text-right text-muted-foreground">{r.avg_duration_days}d</td>
+                    <td className="px-4 py-2.5 text-right text-muted-foreground">
+                      {r.median_jepa_energy != null ? r.median_jepa_energy.toFixed(3) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

@@ -326,6 +326,33 @@ export default function DealsPage() {
                               Price cut
                             </span>
                           )}
+                          {d.jepa_dz_quality != null && d.jepa_dz_quality >= 0.45 && (
+                            <span
+                              title={`Cross-Modal JEPA visual surprise Δz = +${d.jepa_dz_quality.toFixed(2)}σ: photos look sharper than peers with identical specs`}
+                              className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-positive/10 text-positive border border-positive/25"
+                            >
+                              Photos +Δz
+                            </span>
+                          )}
+                          {d.jepa_dz_quality != null && d.jepa_dz_quality <= -0.55 && (
+                            <span
+                              title={`Cross-Modal JEPA visual surprise Δz = ${d.jepa_dz_quality.toFixed(2)}σ: photos look rougher than specs predict`}
+                              className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-negative/10 text-negative border border-negative/25"
+                            >
+                              Inspect photos
+                            </span>
+                          )}
+                          {d.property_regime && d.property_regime !== "residential" && (
+                            <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border">
+                              {d.property_regime === "mixed_commercial"
+                                ? "Mixed-use / Store"
+                                : d.property_regime === "multi_unit_investment"
+                                  ? "Investment"
+                                  : d.property_regime === "live_work"
+                                    ? "Live-work"
+                                    : d.property_regime.replace("_", " ")}
+                            </span>
+                          )}
                         </div>
                         <p className="text-[11px] text-muted-foreground mt-0.5">
                           {d.property_type === "APARTMENT" ? "Apartment" : "House"}
