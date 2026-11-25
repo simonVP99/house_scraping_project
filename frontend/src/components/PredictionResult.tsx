@@ -210,6 +210,22 @@ export default function PredictionResultCard({
               <p className="text-xs text-muted-foreground max-w-3xl leading-relaxed">
                 {prediction.jepa.summary}
               </p>
+              {prediction.jepa.caveats && prediction.jepa.caveats.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  {prediction.jepa.caveats.map((c) => (
+                    <p
+                      key={c.code}
+                      className={`text-xs rounded px-2.5 py-1 border ${
+                        c.severity === "high"
+                          ? "bg-negative/8 border-negative/25 text-negative"
+                          : "bg-warning/10 border-warning/25 text-warning"
+                      }`}
+                    >
+                      <strong>⚠ {c.label}:</strong> {c.message}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-3 text-xs tabular-nums">

@@ -86,6 +86,11 @@ export interface JepaDiagnostics {
   cherry_pick_spread: number;
   cherry_percentile: number;
   worst_fixer_gap: number;
+  pct_cgi?: number;
+  pct_vstage?: number;
+  pct_any_render?: number;
+  pct_plan?: number;
+  caveats?: { code: string; severity: string; label: string; message: string }[];
   sub_scores: { axis: string; z: number }[];
 }
 

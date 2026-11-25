@@ -194,7 +194,12 @@ def test_multimodal_bundle_scores_corpus_cached_listing_end_to_end():
 
 
 def test_jepa_inspector_and_regime_detector():
-    from jepa_inspector import CrossModalJEPAInspector, DEFAULT_JEPA_PATH, detect_property_regime
+    from jepa_inspector import (
+        CrossModalJEPAInspector,
+        DEFAULT_JEPA_PATH,
+        detect_data_caveats,
+        detect_property_regime,
+    )
 
     r_mixed = detect_property_regime(
         property_subtype="HOUSE",
@@ -211,6 +216,13 @@ def test_jepa_inspector_and_regime_detector():
     assert r_inv["code"] == "multi_unit_investment"
     assert r_inv["is_non_standard"] is True
 
+    r_boat = detect_property_regime(
+        property_subtype="HOUSE",
+        description_nl="Deze ruime woonboot van ca. 150 m² op het water in Gent",
+    )
+    assert r_boat["code"] == "houseboat"
+    assert r_boat["is_non_standard"] is True
+
     r_res = detect_property_regime(
         property_subtype="HOUSE",
         title="Gezellige rijwoning met zonnige stadstuin",
@@ -218,6 +230,20 @@ def test_jepa_inspector_and_regime_detector():
     assert r_res["code"] == "residential"
     assert r_res["is_non_standard"] is False
     assert r_res["advisory"] is None
+
+    # Render-on-fixer + condition-mislabel + text-under-option caveats (e.g. Maaltebruggestraat 81)
+    cavs = detect_data_caveats(
+        building_condition="FIRST_TIME_USED",
+        energy_label="E",
+        description_nl="Een te renoveren stadswoning met een vergund ontwerp door architect. OPTIE - BOD AANVAARD.",
+        pct_cgi=0.167,
+        pct_vstage=0.50,
+        pct_any_render=0.50,
+    )
+    codes = {c["code"] for c in cavs}
+    assert "renders_on_fixer" in codes
+    assert "condition_mislabel" in codes
+    assert "text_under_option" in codes
 
     if os.path.exists(DEFAULT_JEPA_PATH) and os.path.exists(OFFLINE_NPZ):
         insp = CrossModalJEPAInspector.load(DEFAULT_JEPA_PATH)
@@ -236,7 +262,7 @@ def test_jepa_inspector_and_regime_detector():
         )
         assert diag is not None
         assert diag["verdict"] in {
-            "overclaimed_condition", "hidden_gem", "exceeds_specs",
+            "renders_detected", "overclaimed_condition", "hidden_gem", "exceeds_specs",
             "high_contradiction", "cherry_picked", "better_than_fixer", "consistent",
         }
         assert 0.0 <= diag["quality_percentile"] <= 100.0

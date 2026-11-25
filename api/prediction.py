@@ -404,6 +404,10 @@ class PredictionService:
                     vis_bundle=vis_bundle,
                     claimed_condition=clean_row.get("building_condition"),
                     delta_pct=delta_pct,
+                    title=clean_row.get("title"),
+                    description=clean_row.get("description"),
+                    description_nl=clean_row.get("description_nl"),
+                    energy_label=clean_row.get("energy_label"),
                 )
             except Exception:
                 jepa_diag = None

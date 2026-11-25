@@ -737,7 +737,31 @@ export default function DealsPage() {
                                 Price cut
                               </span>
                             )}
-                            {d.jepa_dz_quality != null && d.jepa_dz_quality >= 0.45 && (
+                            {d.has_renders && (
+                              <span
+                                title={`CGI architectural renders / virtual staging detected (${d.vis_pct_any_render ?? "?"}% of photos) — visual fair value may reflect post-renovation renders`}
+                                className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-warning/15 text-warning border border-warning/35"
+                              >
+                                Renders / Staged
+                              </span>
+                            )}
+                            {d.has_condition_mislabel && (
+                              <span
+                                title="Immoweb condition tag says As New / Renovated / First-time use, but the description says 'te renoveren'"
+                                className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-negative/10 text-negative border border-negative/25"
+                              >
+                                Condition mismatch
+                              </span>
+                            )}
+                            {d.has_text_under_option && (
+                              <span
+                                title="Description text mentions 'optie' / 'bod aanvaard' / 'compromis'"
+                                className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-warning/10 text-warning border border-warning/30"
+                              >
+                                Text: Option
+                              </span>
+                            )}
+                            {!d.has_renders && d.jepa_dz_quality != null && d.jepa_dz_quality >= 0.45 && (
                               <span
                                 title={`Cross-Modal JEPA visual surprise Δz = +${d.jepa_dz_quality.toFixed(2)}σ`}
                                 className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-positive/10 text-positive border border-positive/25"

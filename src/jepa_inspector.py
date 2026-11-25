@@ -68,6 +68,127 @@ RENTED_YIELD_RE = re.compile(
     r"momenteel verhuurd|verhuurd aan|huuropbrengst|brutorendement|nettorendement",
     re.IGNORECASE,
 )
+HOUSEBOAT_RE = re.compile(
+    r"\b(woonboot|woonschip|houseboat|barge)\b",
+    re.IGNORECASE,
+)
+RENDER_TEXT_RE = re.compile(
+    r"\b(3d[\s-]?impressie|3d[\s-]?visualisatie|3d[\s-]?beeld|3d[\s-]?render|renders?\b|"
+    r"simulatiebeeld|interieursimulatie|virtuele\s+inrichting|virtueel\s+ingericht|"
+    r"sfeerbeeld|niet[\s-]?contractue|architectuurontwerp|vergund\s+ontwerp|"
+    r"renovatieontwerp|renovatievoorstel|homestaging|virtual\s+stag)",
+    re.IGNORECASE,
+)
+FIXER_TEXT_RE = re.compile(
+    r"\b(te\s+renoveren|totaalrenovatie|renovatieproject|opknapwoning|kluswoning|"
+    r"volledig\s+te\s+renoveren|grondig\s+te\s+renoveren)",
+    re.IGNORECASE,
+)
+SOLD_OPTION_TEXT_RE = re.compile(
+    r"(?:\bonder\s+optie\b|\bin\s+optie\b|\boptie\s*[-:!–]|\bbod\s+(?:werd\s+)?aanvaard\b|"
+    r"\bcompromis\s+in\s+opmaak\b|\bverkocht\s*[-:!–]|\breeds\s+verkocht\b)",
+    re.IGNORECASE,
+)
+
+
+def detect_data_caveats(
+    *,
+    building_condition: str | None = None,
+    energy_label: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    description_nl: str | None = None,
+    pct_cgi: float | None = None,
+    pct_vstage: float | None = None,
+    pct_any_render: float | None = None,
+    cherry_spread: float | None = None,
+) -> list[dict[str, str]]:
+    """Detect data-quality / visual-artifact caveats that can distort an automated valuation:
+    - Architectural CGI / virtual-staging renders on a renovation property
+    - Condition mislabel (Immoweb says FIRST_TIME_USED/AS_NEW/JUST_RENOVATED, text says 'te renoveren')
+    - Under-option / sold text in description despite active listing metadata
+    """
+    text = f"{title or ''} {description_nl or ''} {description or ''}"
+    cond = str(building_condition or "").upper().strip()
+    epc = str(energy_label or "").upper().strip()
+
+    has_render_text = bool(RENDER_TEXT_RE.search(text))
+    has_fixer_text = bool(FIXER_TEXT_RE.search(text))
+    has_option_text = bool(SOLD_OPTION_TEXT_RE.search(text))
+
+    p_cgi = float(pct_cgi) if pct_cgi is not None and np.isfinite(pct_cgi) else 0.0
+    p_vstage = float(pct_vstage) if pct_vstage is not None and np.isfinite(pct_vstage) else 0.0
+    p_any = float(pct_any_render) if pct_any_render is not None and np.isfinite(pct_any_render) else max(p_cgi, p_vstage)
+    c_spread = float(cherry_spread) if cherry_spread is not None and np.isfinite(cherry_spread) else 0.0
+
+    caveats: list[dict[str, str]] = []
+
+    # 1. Renders / virtual staging detected
+    strong_visual_render = (p_cgi >= 0.16 and p_any >= 0.45) or p_cgi >= 0.33
+    render_on_fixer = (has_render_text or strong_visual_render) and (
+        has_fixer_text or epc in ("E", "F") or cond in ("TO_RENOVATE", "TO_BE_DONE_UP", "TO_RESTORE")
+    )
+    if render_on_fixer:
+        caveats.append({
+            "code": "renders_on_fixer",
+            "severity": "high",
+            "label": "Architectural renders / virtual staging on fixer",
+            "message": (
+                f"Detected architectural renders / virtual staging ({int(round(p_any * 100))}% of photos "
+                f"flagged CGI/staged{', plus render/design keywords in text' if has_render_text else ''}) "
+                "on a renovation-grade home. Photos depict the post-renovation vision — "
+                "the multimodal fair value can be pulled up toward finished-home comps."
+            ),
+        })
+    elif strong_visual_render or has_render_text:
+        caveats.append({
+            "code": "contains_renders",
+            "severity": "medium",
+            "label": "Contains CGI renders / virtual staging",
+            "message": (
+                f"~{int(round(p_any * 100))}% of sampled images look like CGI renders or virtual staging "
+                f"({int(round(p_cgi * 100))}% hard CGI, {int(round(p_vstage * 100))}% virtual staging). "
+                "Verify which images show the actual current state."
+            ),
+        })
+    elif p_vstage >= 0.50 and c_spread >= 0.08:
+        caveats.append({
+            "code": "mixed_staged_real",
+            "severity": "medium",
+            "label": "Mixed virtual-staged & real photos",
+            "message": (
+                f"~{int(round(p_vstage * 100))}% of photos look virtually staged alongside untouched rooms — "
+                "apparent visual quality may overstate current finishes."
+            ),
+        })
+
+    # 2. Condition field contradicts description
+    if cond in ("FIRST_TIME_USED", "AS_NEW", "JUST_RENOVATED") and has_fixer_text:
+        caveats.append({
+            "code": "condition_mislabel",
+            "severity": "high",
+            "label": "Condition field contradicts description",
+            "message": (
+                f"Immoweb metadata lists condition as '{cond.replace('_', ' ').title()}', "
+                "yet the listing text explicitly describes a renovation property ('te renoveren' / "
+                "'renovatieproject'). Treat the predicted fair value with caution — the model's "
+                "condition feature is seeing the mislabelled Immoweb tag."
+            ),
+        })
+
+    # 3. Text says already under option / sold
+    if has_option_text:
+        caveats.append({
+            "code": "text_under_option",
+            "severity": "medium",
+            "label": "Description mentions option / offer accepted",
+            "message": (
+                "The description text mentions 'optie' / 'bod aanvaard' / 'compromis' — "
+                "this listing may already be spoken for even if Immoweb's status badge wasn't updated."
+            ),
+        })
+
+    return caveats
 
 
 def detect_property_regime(
@@ -85,6 +206,8 @@ def detect_property_regime(
     text = f"{title or ''} {description_nl or ''} {description or ''}"
 
     flags: list[str] = []
+    if HOUSEBOAT_RE.search(text):
+        flags.append("houseboat")
     if sub == "MIXED_USE_BUILDING" or MIXED_COMMERCIAL_RE.search(text):
         flags.append("mixed_commercial")
     if LIVE_WORK_RE.search(text):
@@ -97,6 +220,19 @@ def detect_property_regime(
         flags.append("service_flat")
     elif RENTED_YIELD_RE.search(text):
         flags.append("rented_yield")
+
+    if "houseboat" in flags:
+        return {
+            "code": "houseboat",
+            "label": "Houseboat / woonboot",
+            "flags": flags,
+            "is_non_standard": True,
+            "expected_mdape_pct": 18.0,
+            "advisory": (
+                "Houseboat / woonboot detected — priced on hull condition, mooring permit "
+                "(ligplaats), and water-lease terms rather than land/brick comps."
+            ),
+        }
 
     if "mixed_commercial" in flags:
         return {
@@ -235,6 +371,10 @@ class CrossModalJEPAInspector:
         *,
         claimed_condition: str | None = None,
         delta_pct: float | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        description_nl: str | None = None,
+        energy_label: str | None = None,
     ) -> dict[str, Any] | None:
         """Compute full Cross-Modal JEPA diagnostics for a single listing with photos."""
         if vis_bundle is None or feat_df is None or len(feat_df) == 0:
@@ -245,6 +385,16 @@ class CrossModalJEPAInspector:
         so_q = np.asarray(vis_bundle.get("so_q_feats"), dtype=np.float32).reshape(1, -1)
         if sig.shape[1] != 768 or so.shape[1] != 1152 or not np.isfinite(sig).all() or np.linalg.norm(sig) < 1e-4:
             return None
+
+        rf_raw = vis_bundle.get("render_feats")
+        if rf_raw is not None:
+            rf = np.asarray(rf_raw, dtype=np.float32).reshape(-1)
+            pct_cgi = float(rf[2]) if len(rf) > 2 and np.isfinite(rf[2]) else 0.0
+            pct_vstage = float(rf[3]) if len(rf) > 3 and np.isfinite(rf[3]) else 0.0
+            pct_any_render = float(rf[4]) if len(rf) > 4 and np.isfinite(rf[4]) else max(pct_cgi, pct_vstage)
+            pct_plan = float(rf[6]) if len(rf) > 6 and np.isfinite(rf[6]) else 0.0
+        else:
+            pct_cgi = pct_vstage = pct_any_render = pct_plan = 0.0
 
         C = self._transform_tab(feat_df.iloc[:1])
         if e5_vec is None or not np.isfinite(e5_vec).all():
@@ -294,12 +444,45 @@ class CrossModalJEPAInspector:
         energy_pct = _pct_rank(e_sym, self.ref_quantiles["energy_sym"])
         cherry_pct = _pct_rank(cherry_spread, self.ref_quantiles["cherry_spread"])
 
-        # Clear, honest buyer verdict
+        # Clear, honest buyer verdict — check CGI / virtual-staging renders FIRST so we
+        # never misclassify mixed render + real-photo galleries as "Uneven room quality"
+        # or "Visual hidden gem"!
         cond_upper = str(claimed_condition or "").upper()
-        claimed_high = cond_upper in ("AS_NEW", "JUST_RENOVATED")
+        claimed_high = cond_upper in ("AS_NEW", "JUST_RENOVATED", "FIRST_TIME_USED")
         claimed_low = cond_upper in ("TO_RENOVATE", "TO_BE_DONE_UP", "TO_RESTORE")
 
-        if claimed_high and quality_pct <= 20.0:
+        caveats = detect_data_caveats(
+            building_condition=claimed_condition,
+            energy_label=energy_label,
+            title=title,
+            description=description,
+            description_nl=description_nl,
+            pct_cgi=pct_cgi,
+            pct_vstage=pct_vstage,
+            pct_any_render=pct_any_render,
+            cherry_spread=cherry_spread,
+        )
+        caveat_codes = {c["code"] for c in caveats}
+
+        if "renders_on_fixer" in caveat_codes:
+            verdict = "renders_detected"
+            verdict_label = "Architectural renders / virtual staging detected"
+            tone = "warning"
+            summary = (
+                f"~{int(round(pct_any_render * 100))}% of photos look like CGI renders or virtual staging "
+                "on a renovation-grade home. Renders show the proposed post-renovation look, not the "
+                "current state — visually driven fair value may be inflated."
+            )
+        elif "contains_renders" in caveat_codes or "mixed_staged_real" in caveat_codes:
+            verdict = "renders_detected"
+            verdict_label = "Contains CGI renders / virtual staging"
+            tone = "warning"
+            summary = (
+                f"~{int(round(pct_any_render * 100))}% of sampled photos appear to be CGI renders or "
+                f"virtual staging ({int(round(pct_cgi * 100))}% hard CGI, {int(round(pct_vstage * 100))}% staged). "
+                "High photo dispersion is likely from mixing renders with real photos — verify current finishes."
+            )
+        elif claimed_high and quality_pct <= 20.0:
             verdict = "overclaimed_condition"
             verdict_label = "Photos look dated vs claimed condition"
             tone = "negative"
@@ -380,6 +563,11 @@ class CrossModalJEPAInspector:
             "cherry_pick_spread": round(cherry_spread, 4),
             "cherry_percentile": cherry_pct,
             "worst_fixer_gap": round(worst_fixer_gap, 4),
+            "pct_cgi": round(pct_cgi * 100.0, 1),
+            "pct_vstage": round(pct_vstage * 100.0, 1),
+            "pct_any_render": round(pct_any_render * 100.0, 1),
+            "pct_plan": round(pct_plan * 100.0, 1),
+            "caveats": caveats,
             "sub_scores": sub_scores,
         }
 

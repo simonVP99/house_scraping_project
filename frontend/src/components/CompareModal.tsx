@@ -104,6 +104,24 @@ const COMPARE_ROWS: CompareRowSpec[] = [
   },
   {
     section: "Valuation & Deal",
+    label: "CGI / Staged Photos",
+    render: (d) =>
+      d.jepa.pct_any_render != null
+        ? `${Math.round(d.jepa.pct_any_render)}%${d.jepa.pct_cgi ? ` (${Math.round(d.jepa.pct_cgi)}% CGI)` : ""}`
+        : "—",
+    numeric: (d) => d.jepa.pct_any_render ?? null,
+    prefer: "lower",
+  },
+  {
+    section: "Valuation & Deal",
+    label: "Data / Photo Caveats",
+    render: (d) =>
+      d.caveats && d.caveats.length > 0
+        ? `⚠ ${d.caveats.map((c) => c.label).join(" · ")}`
+        : "None",
+  },
+  {
+    section: "Valuation & Deal",
     label: "Property Regime",
     render: (d) => d.regime?.label ?? "Standard Residential",
   },

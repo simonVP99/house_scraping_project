@@ -403,7 +403,12 @@ class LiveListingsService:
                 "property_regime": sub["property_regime"].fillna("residential") if "property_regime" in sub.columns else "residential",
                 "jepa_dz_quality": _num_col("jepa_dz_quality", 2),
                 "jepa_energy_sym": _num_col("jepa_energy_sym", 2),
-                "source": "corpus_recent",
+                "vis_pct_any_render": (_num_col("vis_pct_any_render") * 100.0).round(0) if "vis_pct_any_render" in sub.columns else None,
+                "has_renders": _bool_col("has_renders"),
+                "has_condition_mislabel": _bool_col("has_condition_mislabel"),
+                "has_text_under_option": _bool_col("has_text_under_option"),
+                "caveat_codes": _col("caveat_codes"),
+                "source": source,
             })
 
         # Apply user filters

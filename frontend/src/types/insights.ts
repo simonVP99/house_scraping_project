@@ -314,7 +314,19 @@ export interface DealItem {
   property_regime?: string | null;
   jepa_dz_quality?: number | null;
   jepa_energy_sym?: number | null;
+  vis_pct_any_render?: number | null;
+  has_renders?: boolean | null;
+  has_condition_mislabel?: boolean | null;
+  has_text_under_option?: boolean | null;
+  caveat_codes?: string | null;
   source: "live" | "corpus_recent" | string;
+}
+
+export interface DataCaveat {
+  code: string;
+  severity: "high" | "medium" | "low" | string;
+  label: string;
+  message: string;
 }
 
 export interface LiveCheckResult {
@@ -411,6 +423,9 @@ export interface PropertyDossier {
     dz_quality: number | null;
     energy_sym: number | null;
     cherry_spread: number | null;
+    pct_cgi?: number | null;
+    pct_vstage?: number | null;
+    pct_any_render?: number | null;
     detail?: {
       verdict: string;
       verdict_label: string;
@@ -422,9 +437,14 @@ export interface PropertyDossier {
       energy_percentile: number;
       cherry_spread: number;
       cherry_percentile: number;
+      pct_cgi?: number;
+      pct_vstage?: number;
+      pct_any_render?: number;
+      caveats?: DataCaveat[];
       sub_scores: { axis: string; z: number }[];
     } | null;
   };
+  caveats?: DataCaveat[];
   regime: {
     code: string;
     label: string;

@@ -287,6 +287,9 @@ class PropertyDossierService:
         jepa_dz = _clean_float(oof.get("jepa_dz_quality"), 2)
         jepa_e = _clean_float(oof.get("jepa_energy_sym"), 2)
         jepa_cherry = _clean_float(oof.get("jepa_cherry_spread"), 2)
+        pct_cgi = _clean_float(oof.get("vis_pct_cgi"), 3)
+        pct_vstage = _clean_float(oof.get("vis_pct_vstage"), 3)
+        pct_any_render = _clean_float(oof.get("vis_pct_any_render"), 3)
         if self.prediction_service is not None:
             insp = getattr(self.prediction_service, "jepa_inspector", None)
             venc = getattr(self.prediction_service, "vision_encoder", None)
@@ -294,6 +297,13 @@ class PropertyDossierService:
                 try:
                     vis_cached = venc._lookup_cached(pid)
                     if isinstance(vis_cached, dict):
+                        rf = vis_cached.get("render_feats")
+                        if rf is not None:
+                            rf_arr = np.asarray(rf, dtype=np.float32).reshape(-1)
+                            if len(rf_arr) > 4:
+                                pct_cgi = float(rf_arr[2])
+                                pct_vstage = float(rf_arr[3])
+                                pct_any_render = float(rf_arr[4])
                         feat_row = pd.DataFrame([{k: v for k, v in oof.items() if isinstance(v, (int, float, np.number, bool, np.bool_))}])
                         cand_jepa = insp.score_single(
                             feat_df=feat_row,
@@ -301,11 +311,33 @@ class PropertyDossierService:
                             vis_bundle=vis_cached,
                             claimed_condition=_clean(_pick("building_condition")),
                             delta_pct=delta_pct,
+                            title=title,
+                            description=desc_main,
+                            description_nl=desc_nl,
+                            energy_label=_clean(_pick("energy_label")),
                         )
                         if isinstance(cand_jepa, dict):
                             jepa_detail = cand_jepa
                 except Exception:
                     jepa_detail = None
+
+        # Data-quality caveats (renders on fixer, condition mislabel, option text)
+        caveats: list[dict[str, str]] = []
+        try:
+            from jepa_inspector import detect_data_caveats
+            caveats = detect_data_caveats(
+                building_condition=_clean(_pick("building_condition")),
+                energy_label=_clean(_pick("energy_label")),
+                title=title,
+                description=desc_main,
+                description_nl=desc_nl,
+                pct_cgi=pct_cgi,
+                pct_vstage=pct_vstage,
+                pct_any_render=pct_any_render,
+                cherry_spread=jepa_cherry,
+            )
+        except Exception:
+            caveats = []
 
         # Comparables from DataLoader
         comparables = None
@@ -404,8 +436,12 @@ class PropertyDossierService:
                 "dz_quality": jepa_dz,
                 "energy_sym": jepa_e,
                 "cherry_spread": jepa_cherry,
+                "pct_cgi": round(pct_cgi * 100.0, 1) if pct_cgi is not None else None,
+                "pct_vstage": round(pct_vstage * 100.0, 1) if pct_vstage is not None else None,
+                "pct_any_render": round(pct_any_render * 100.0, 1) if pct_any_render is not None else None,
                 "detail": jepa_detail,
             },
+            "caveats": caveats,
             "regime": regime_info,
             "availability": {
                 "status": avail_status,

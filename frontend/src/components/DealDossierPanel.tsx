@@ -112,6 +112,22 @@ function DossierBody({
               <strong>{dossier.regime.label}:</strong> {dossier.regime.advisory}
             </p>
           )}
+          {dossier.caveats && dossier.caveats.length > 0 && (
+            <div className="space-y-1.5 pt-0.5">
+              {dossier.caveats.map((cav) => (
+                <div
+                  key={cav.code}
+                  className={`text-xs rounded-md px-3 py-1.5 border ${
+                    cav.severity === "high"
+                      ? "bg-negative/8 border-negative/30 text-negative"
+                      : "bg-warning/10 border-warning/30 text-warning"
+                  }`}
+                >
+                  <strong>⚠ {cav.label}:</strong> {cav.message}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -173,10 +189,18 @@ function DossierBody({
       {/* Photo Strip (if local cached photos exist) */}
       {dossier.photos.length > 0 && (
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
             <span className="font-semibold uppercase tracking-wider">
               Listing Photos ({dossier.photos.length} cached
               {dossier.picture_count ? ` of ${dossier.picture_count} total` : ""})
+              {dossier.jepa.pct_any_render != null && dossier.jepa.pct_any_render >= 30 && (
+                <span className="ml-2 text-warning font-semibold normal-case">
+                  · {Math.round(dossier.jepa.pct_any_render)}% flagged CGI/staged
+                  {dossier.jepa.pct_cgi != null && dossier.jepa.pct_cgi > 0
+                    ? ` (${Math.round(dossier.jepa.pct_cgi)}% hard CGI)`
+                    : ""}
+                </span>
+              )}
             </span>
             {dossier.has_virtual_tour && <span className="text-primary font-medium">3D Virtual Tour listed</span>}
           </div>

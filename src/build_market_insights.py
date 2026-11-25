@@ -260,19 +260,72 @@ def main() -> None:
         df["jepa_cherry_spread"] = np.nan
         df["jepa_has_vis"] = False
 
-    from jepa_inspector import detect_property_regime
-    regimes = [
-        detect_property_regime(
-            property_subtype=st, title=ti, description=ds, description_nl=dnl
-        )["code"]
-        for st, ti, ds, dnl in zip(
-            df.get("property_subtype", pd.Series("", index=df.index)),
-            df["title"].fillna(""),
-            df["description"].fillna(""),
-            df["description_nl"].fillna(""),
+    from jepa_inspector import detect_data_caveats, detect_property_regime
+
+    # Attach visual render fractions from offline vision embeddings so Deal Hunter & Dossier
+    # can warn buyers about CGI / virtual-staging renders and condition mislabels!
+    vis_npz_path = ROOT / "external_data" / "vision_full" / "vision_full_embeddings.npz"
+    pct_cgi = np.full(len(df), np.nan, dtype=np.float32)
+    pct_vstage = np.full(len(df), np.nan, dtype=np.float32)
+    pct_any_render = np.full(len(df), np.nan, dtype=np.float32)
+    if vis_npz_path.exists():
+        vz = np.load(vis_npz_path, allow_pickle=True)
+        v_map = {str(p): i for i, p in enumerate(vz["property_id"])}
+        rf = vz["render_feats"]
+        for row_i, pid_s in enumerate(df["pid"].tolist()):
+            vi = v_map.get(pid_s)
+            if vi is not None:
+                pct_cgi[row_i] = float(rf[vi, 2])
+                pct_vstage[row_i] = float(rf[vi, 3])
+                pct_any_render[row_i] = float(rf[vi, 4])
+    df["vis_pct_cgi"] = pct_cgi
+    df["vis_pct_vstage"] = pct_vstage
+    df["vis_pct_any_render"] = pct_any_render
+
+    regimes = []
+    caveat_codes_list = []
+    has_render_flag = []
+    has_cond_mislabel = []
+    has_text_option = []
+    for st, cond, epc, ti, ds, dnl, p_c, p_v, p_a, ch in zip(
+        df.get("property_subtype", pd.Series("", index=df.index)),
+        df.get("building_condition", pd.Series("", index=df.index)),
+        df.get("energy_label", pd.Series("", index=df.index)),
+        df["title"].fillna(""),
+        df["description"].fillna(""),
+        df["description_nl"].fillna(""),
+        df["vis_pct_cgi"],
+        df["vis_pct_vstage"],
+        df["vis_pct_any_render"],
+        df["jepa_cherry_spread"],
+    ):
+        regimes.append(
+            detect_property_regime(
+                property_subtype=st, title=ti, description=ds, description_nl=dnl
+            )["code"]
         )
-    ]
+        cavs = detect_data_caveats(
+            building_condition=cond,
+            energy_label=epc,
+            title=ti,
+            description=ds,
+            description_nl=dnl,
+            pct_cgi=None if pd.isna(p_c) else float(p_c),
+            pct_vstage=None if pd.isna(p_v) else float(p_v),
+            pct_any_render=None if pd.isna(p_a) else float(p_a),
+            cherry_spread=None if pd.isna(ch) else float(ch),
+        )
+        codes = [c["code"] for c in cavs]
+        caveat_codes_list.append(",".join(codes))
+        has_render_flag.append(any(c in codes for c in ("renders_on_fixer", "contains_renders", "mixed_staged_real")))
+        has_cond_mislabel.append("condition_mislabel" in codes)
+        has_text_option.append("text_under_option" in codes)
+
     df["property_regime"] = regimes
+    df["caveat_codes"] = caveat_codes_list
+    df["has_renders"] = has_render_flag
+    df["has_condition_mislabel"] = has_cond_mislabel
+    df["has_text_under_option"] = has_text_option
 
     # 3. Save compact oof_analytics.parquet for DataLoader
     keep_cols = [
@@ -296,6 +349,8 @@ def main() -> None:
         "agency_clean", "n_snapshots",
         "title", "description_snippet",
         "jepa_dz_quality", "jepa_energy_sym", "jepa_cherry_spread",
+        "vis_pct_cgi", "vis_pct_vstage", "vis_pct_any_render",
+        "caveat_codes", "has_renders", "has_condition_mislabel", "has_text_under_option",
     ]
     keep_cols = [c for c in keep_cols if c in df.columns]
     out_parquet = PROD_DIR / "oof_analytics.parquet"
