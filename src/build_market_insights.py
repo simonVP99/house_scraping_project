@@ -154,13 +154,17 @@ def main() -> None:
     df["price_per_sqm"] = np.where(df["livable_area"] > 0, df["price"] / df["livable_area"], np.nan)
     df["pred_price_per_sqm"] = np.where(df["livable_area"] > 0, df["pred_mm_eur"] / df["livable_area"], np.nan)
 
-    # 2. Enrich with raw snapshot dynamics (listing duration, under-option, price cuts, agency)
-    print("Aggregating raw snapshot dynamics (duration, price cuts, agencies)...")
-    raw_cols = ["property_id", "date_obtained", "price", "is_under_option", "immo_office_name", "price_old_value"]
+    # 2. Enrich with raw snapshot dynamics (listing duration, under-option, price cuts, agency, availability)
+    print("Aggregating raw snapshot dynamics (duration, price cuts, agencies, availability)...")
+    raw_cols = [
+        "property_id", "date_obtained", "price", "is_under_option", "is_sold_or_rented",
+        "immo_office_name", "price_old_value", "street", "house_number", "title", "description_nl", "description",
+    ]
     raw = pd.read_parquet(RAW_PARQUET, columns=raw_cols)
     raw["dt"] = pd.to_datetime(raw["date_obtained"], format="%d%m%Y", errors="coerce")
     raw["pid"] = raw["property_id"].astype(str)
     raw = raw.sort_values("dt")
+    latest_scrape_dt = raw["dt"].max()
 
     grp = raw.groupby("pid").agg(
         first_seen=("dt", "min"),
@@ -169,10 +173,20 @@ def main() -> None:
         first_price=("price", "first"),
         last_price=("price", "last"),
         is_under_option=("is_under_option", lambda s: bool(s.fillna(False).any())),
+        is_under_option_latest=("is_under_option", lambda s: bool(s.fillna(False).iloc[-1])),
+        is_sold_or_rented=("is_sold_or_rented", lambda s: bool(s.fillna(False).any())),
         immo_office_name=("immo_office_name", "last"),
         has_old_price=("price_old_value", lambda s: bool(s.notna().any())),
+        street=("street", "last"),
+        house_number=("house_number", "last"),
+        title=("title", "last"),
+        description_nl=("description_nl", "last"),
+        description=("description", "last"),
     ).reset_index()
     grp["listing_duration_days"] = (grp["last_seen"] - grp["first_seen"]).dt.days.fillna(0).astype(int)
+    grp["days_since_last_seen"] = (latest_scrape_dt - grp["last_seen"]).dt.days.fillna(999).astype(int)
+    grp["first_seen_str"] = grp["first_seen"].dt.strftime("%Y-%m-%d")
+    grp["last_seen_str"] = grp["last_seen"].dt.strftime("%Y-%m-%d")
     grp["had_price_cut"] = (
         ((grp["last_price"] < grp["first_price"]) & (grp["first_price"] > 0))
         | grp["has_old_price"]
@@ -188,10 +202,23 @@ def main() -> None:
         np.nan,
     )
 
+    # Compact summary snippet (prefer Dutch, clean whitespace, max 360 chars)
+    def _clean_snippet(row):
+        for col in ("description_nl", "description"):
+            val = row[col]
+            if isinstance(val, str) and len(val.strip()) >= 25:
+                txt = " ".join(val.split())
+                return txt[:360] + ("…" if len(txt) > 360 else "")
+        return ""
+
+    grp["description_snippet"] = grp.apply(_clean_snippet, axis=1)
+
     df["pid"] = df["property_id"].astype(str)
     df = df.merge(
-        grp[["pid", "first_seen", "last_seen", "n_snapshots", "listing_duration_days",
-             "is_under_option", "immo_office_name", "had_price_cut", "price_cut_eur", "price_cut_pct"]],
+        grp[["pid", "first_seen", "last_seen", "first_seen_str", "last_seen_str", "days_since_last_seen",
+             "n_snapshots", "listing_duration_days", "is_under_option", "is_under_option_latest",
+             "is_sold_or_rented", "immo_office_name", "had_price_cut", "price_cut_eur", "price_cut_pct",
+             "street", "house_number", "title", "description_nl", "description", "description_snippet"]],
         on="pid",
         how="left",
         suffixes=("", "_raw"),
@@ -201,8 +228,12 @@ def main() -> None:
         df.drop(columns=["is_under_option_raw"], inplace=True)
     else:
         df["is_under_option"] = df["is_under_option"].fillna(False).astype(bool)
+    df["is_under_option_latest"] = df["is_under_option_latest"].fillna(False).astype(bool)
+    df["is_sold_or_rented"] = df["is_sold_or_rented"].fillna(False).astype(bool)
     df["listing_duration_days"] = df["listing_duration_days"].fillna(0).astype(float)
+    df["days_since_last_seen"] = df["days_since_last_seen"].fillna(999).astype(int)
     df["had_price_cut"] = df["had_price_cut"].fillna(False).astype(bool)
+    df["latest_scrape_date"] = latest_scrape_dt.strftime("%Y-%m-%d")
 
     display_map = _load_wijk_display_map()
     df["neighbourhood_display"] = df["neighbourhood"].map(lambda x: _prettify_neighbourhood(x, display_map))
@@ -229,14 +260,6 @@ def main() -> None:
         df["jepa_cherry_spread"] = np.nan
         df["jepa_has_vis"] = False
 
-    # Attach raw title/description for mixed-use / investment regime detection
-    raw_txt = pd.read_parquet(
-        RAW_PARQUET,
-        columns=["property_id", "title", "description_nl", "description"],
-    )
-    raw_txt["pid"] = raw_txt["property_id"].astype(str)
-    raw_txt = raw_txt.drop_duplicates(subset=["pid"], keep="last")
-    df = df.merge(raw_txt[["pid", "title", "description_nl", "description"]], on="pid", how="left")
     from jepa_inspector import detect_property_regime
     regimes = [
         detect_property_regime(
@@ -254,6 +277,7 @@ def main() -> None:
     # 3. Save compact oof_analytics.parquet for DataLoader
     keep_cols = [
         "property_id", "date_obtained", "publication_year", "publication_month",
+        "first_seen_str", "last_seen_str", "days_since_last_seen", "latest_scrape_date",
         "price", "pred_mm_eur", "pred_tt_eur", "delta_eur", "delta_pct", "asking_premium_pct",
         "vision_delta_eur", "vision_delta_pct", "ens_std_mm", "normal_mask",
         "price_per_sqm", "pred_price_per_sqm",
@@ -264,10 +288,13 @@ def main() -> None:
         "has_garden", "garden_surface", "has_terrace", "terrace_surface",
         "has_lift", "has_double_glazing", "has_photovoltaic_panels", "has_heat_pump",
         "indoor_parking_count", "outdoor_parking_count", "cadastral_income",
-        "latitude", "longitude", "postal_code", "neighbourhood", "neighbourhood_display",
+        "latitude", "longitude", "postal_code", "street", "house_number",
+        "neighbourhood", "neighbourhood_display",
         "statbel_sector", "dist_from_center", "street_type",
-        "listing_duration_days", "is_under_option", "had_price_cut", "price_cut_eur", "price_cut_pct",
+        "listing_duration_days", "is_under_option", "is_under_option_latest", "is_sold_or_rented",
+        "had_price_cut", "price_cut_eur", "price_cut_pct",
         "agency_clean", "n_snapshots",
+        "title", "description_snippet",
         "jepa_dz_quality", "jepa_energy_sym", "jepa_cherry_spread",
     ]
     keep_cols = [c for c in keep_cols if c in df.columns]

@@ -90,6 +90,13 @@ def test_deals_endpoint_and_filters():
         {
             "property_id": "101",
             "date_obtained": "2026-11-10",
+            "last_seen_str": "2026-11-23",
+            "days_since_last_seen": 0,
+            "latest_scrape_date": "2026-11-23",
+            "street": "Veldstraat",
+            "house_number": "12",
+            "title": "Gezellige stadswoning met tuin",
+            "description_snippet": "Lichtrijke woning in hartje Gent.",
             "price_eur": 300_000.0,
             "pred_mm_eur": 380_000.0,
             "normal_mask": True,
@@ -107,6 +114,13 @@ def test_deals_endpoint_and_filters():
         {
             "property_id": "102",
             "date_obtained": "2026-11-12",
+            "last_seen_str": "2026-09-20",
+            "days_since_last_seen": 64,
+            "latest_scrape_date": "2026-11-23",
+            "street": "Antwerpsesteenweg",
+            "house_number": "5",
+            "title": "Appartement nabij Dampoort",
+            "description_snippet": "Ruim appartement.",
             "price_eur": 420_000.0,
             "pred_mm_eur": 400_000.0,
             "normal_mask": True,
@@ -124,20 +138,29 @@ def test_deals_endpoint_and_filters():
     ])
     svc.data_loader = mock_loader
 
-    # Corpus fallback with filters
-    res = svc.get_deals(property_type="HOUSE", min_epc="B", min_delta_pct=10.0, below_band_only=True)
+    # Corpus fallback with filters + availability status + overview fields
+    res = svc.get_deals(property_type="HOUSE", min_epc="B", min_delta_pct=10.0, below_band_only=True, available_only=True)
     assert res["source"] == "corpus_recent"
     assert res["total"] == 1
-    assert res["deals"][0]["property_id"] == "101"
-    assert res["deals"][0]["band_position"] == "below_band"
-    assert res["deals"][0]["had_price_cut"] is True
+    d0 = res["deals"][0]
+    assert d0["property_id"] == "101"
+    assert d0["band_position"] == "below_band"
+    assert d0["had_price_cut"] is True
+    assert d0["availability_status"] == "active_recent"
+    assert d0["address"] == "Veldstraat 12, 9000 Gent"
+    assert d0["title"] == "Gezellige stadswoning met tuin"
+
+    # Available-only excludes older listings
+    res_all = svc.get_deals(available_only=True)
+    assert [d["property_id"] for d in res_all["deals"]] == ["101"]
 
     # Route test through Flask app
     app = create_app(loader=mock_loader, pred_service=MagicMock(), listings_service=svc)
     app.config["TESTING"] = True
-    resp = app.test_client().get("/api/deals?property_type=HOUSE&min_epc=C&below_band_only=true")
+    resp = app.test_client().get("/api/deals?property_type=HOUSE&min_epc=C&below_band_only=true&available_only=true")
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["source"] == "corpus_recent"
     assert len(body["deals"]) == 1
     assert body["deals"][0]["property_id"] == "101"
+    assert body["deals"][0]["availability_status"] == "active_recent"

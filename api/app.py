@@ -246,9 +246,53 @@ def create_app(loader=None, pred_service=None, listings_service=None):
             min_epc=request.args.get("min_epc"),
             min_delta_pct=float(min_delta_raw) if min_delta_raw else None,
             below_band_only=request.args.get("below_band_only", "").lower() in ("1", "true", "yes"),
+            available_only=request.args.get("available_only", "").lower() in ("1", "true", "yes"),
             limit=int(limit_raw) if limit_raw.isdigit() else 150,
         )
         return jsonify(payload)
+
+    @app.route("/api/deals/<property_id>/check-live", methods=["POST"])
+    def check_deal_live_availability(property_id: str):
+        """Lightweight live check against Immoweb to see if a listing is still online / under option / sold."""
+        import urllib.request
+        import urllib.error
+
+        pid = "".join(ch for ch in str(property_id) if ch.isdigit())
+        if not pid:
+            return jsonify({"error": "Invalid property_id"}), 400
+        url = f"https://www.immoweb.be/nl/zoekertje/property/te-koop/gent/9000/{pid}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                html = resp.read(250_000).decode("utf-8", errors="replace")
+                final_url = resp.geturl()
+            low_html = html.lower()
+            if '"issoldorrented":true' in low_html or '"is_sold_or_rented":true' in low_html:
+                return jsonify({"property_id": pid, "live_status": "sold_or_rented", "label": "Sold / Removed", "url": final_url})
+            if '"isunderoption":true' in low_html or '"is_under_option":true' in low_html:
+                return jsonify({"property_id": pid, "live_status": "under_option", "label": "Under Option", "url": final_url})
+            if "window.classified" in html:
+                return jsonify({"property_id": pid, "live_status": "online", "label": "Still Online", "url": final_url})
+            if "datadome" in low_html or "captcha" in low_html:
+                return jsonify({"property_id": pid, "live_status": "blocked", "label": "Blocked by Anti-Bot — Open Link", "url": url})
+            return jsonify({"property_id": pid, "live_status": "unknown", "label": "Uncertain — Open Link", "url": final_url})
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                return jsonify({"property_id": pid, "live_status": "offline", "label": "No Longer Listed (404)", "url": url})
+            if e.code == 403:
+                return jsonify({"property_id": pid, "live_status": "blocked", "label": "Blocked by Anti-Bot — Open Link", "url": url})
+            return jsonify({"property_id": pid, "live_status": "error", "label": f"HTTP {e.code}", "url": url})
+        except Exception:
+            return jsonify({"property_id": pid, "live_status": "error", "label": "Check timed out — Open Link", "url": url})
 
     # ---- Model Metadata & Market Insights --------------------------------
     @app.route("/api/model/metadata")

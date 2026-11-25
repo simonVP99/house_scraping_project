@@ -210,6 +210,7 @@ class LiveListingsService:
         min_epc: str | None = None,
         min_delta_pct: float | None = None,
         below_band_only: bool = False,
+        available_only: bool = False,
         limit: int = 200,
     ) -> dict:
         """City-wide deal feed: uses live scraped listings when fresh, otherwise falls back
@@ -229,6 +230,11 @@ class LiveListingsService:
                     ),
                     axis=1,
                 )
+            if "availability_status" not in df.columns:
+                df["availability_status"] = "active_recent"
+                df["last_seen"] = self.date_used
+                df["days_since_last_seen"] = 0
+                df["latest_scrape_date"] = self.date_used
         else:
             source = "corpus_recent"
             date_used = None
@@ -239,11 +245,17 @@ class LiveListingsService:
             sub = adf.copy()
             if "date_obtained" in sub.columns:
                 sub["_dt"] = pd.to_datetime(sub["date_obtained"], errors="coerce")
-                max_dt = sub["_dt"].max()
+                # Prefer last_seen_str if present so listings first seen earlier but STILL active
+                # in the latest scrape stay included in the recent deal pool!
+                if "last_seen_str" in sub.columns:
+                    sub["_last_dt"] = pd.to_datetime(sub["last_seen_str"], errors="coerce").fillna(sub["_dt"])
+                else:
+                    sub["_last_dt"] = sub["_dt"]
+                max_dt = sub["_last_dt"].max()
                 if pd.notna(max_dt):
                     date_used = max_dt.strftime("%Y-%m-%d")
                     cutoff = max_dt - pd.Timedelta(days=90)
-                    recent = sub[sub["_dt"] >= cutoff]
+                    recent = sub[sub["_last_dt"] >= cutoff]
                     if len(recent) >= 100:
                         sub = recent
             if "normal_mask" in sub.columns:
@@ -252,7 +264,8 @@ class LiveListingsService:
             # Deduplicate identical physical listings (same neighbourhood + asking + area + beds + EPC)
             dedup_cols = [c for c in ("neighbourhood", "price_eur", "livable_area", "number_of_bedrooms", "energy_label") if c in sub.columns]
             if len(dedup_cols) >= 3:
-                sub = sub.sort_values("_dt" if "_dt" in sub.columns else "property_id").drop_duplicates(subset=dedup_cols, keep="last")
+                sort_col = "_last_dt" if "_last_dt" in sub.columns else ("_dt" if "_dt" in sub.columns else "property_id")
+                sub = sub.sort_values(sort_col).drop_duplicates(subset=dedup_cols, keep="last")
 
             asking = pd.to_numeric(sub["price_eur"] if "price_eur" in sub.columns else sub["price"] * 1000.0, errors="coerce")
             pred = pd.to_numeric(sub["pred_mm_eur"], errors="coerce")
@@ -278,9 +291,45 @@ class LiveListingsService:
                 if "property_type_label" in sub.columns
                 else sub["property_type_HOUSE"].map(lambda x: "HOUSE" if int(x or 0) == 1 else "APARTMENT")
             )
+
+            # Build human-readable street address when available
+            def _make_addr(r):
+                st = str(r.get("street") or "").strip()
+                hn = str(r.get("house_number") or "").strip()
+                pc = str(r.get("postal_code") or "9000").strip()
+                nb = str(r.get(nbh_col) or "").strip()
+                if st and st.lower() not in ("nan", "none"):
+                    left = f"{st} {hn}".strip() if hn and hn.lower() not in ("nan", "none") else st
+                    return f"{left}, {pc} Gent"
+                return f"{nb} · {pc} Gent"
+
+            # Availability status derived from latest scrape snapshot
+            days_ago = pd.to_numeric(sub["days_since_last_seen"], errors="coerce").fillna(999).astype(int) if "days_since_last_seen" in sub.columns else pd.Series(999, index=sub.index)
+            is_opt = sub["is_under_option_latest"].fillna(False).astype(bool) if "is_under_option_latest" in sub.columns else (sub["is_under_option"].fillna(False).astype(bool) if "is_under_option" in sub.columns else pd.Series(False, index=sub.index))
+            is_sold = sub["is_sold_or_rented"].fillna(False).astype(bool) if "is_sold_or_rented" in sub.columns else pd.Series(False, index=sub.index)
+            avail_status = pd.Series("likely_gone", index=sub.index)
+            avail_status = avail_status.mask(days_ago <= 14, "seen_recently")
+            avail_status = avail_status.mask(days_ago <= 3, "active_recent")
+            avail_status = avail_status.mask(is_opt, "under_option")
+            avail_status = avail_status.mask(is_sold, "sold_or_rented")
+
+            def _col(name, default=None):
+                return sub[name] if name in sub.columns else default
+
+            def _bool_col(name):
+                if name not in sub.columns:
+                    return False
+                return sub[name].fillna(False).astype(bool)
+
+            def _num_col(name, ndigits=None):
+                if name not in sub.columns:
+                    return None
+                s = pd.to_numeric(sub[name], errors="coerce")
+                return s.round(ndigits) if ndigits is not None else s
+
             df = pd.DataFrame({
                 "property_id": pids,
-                "address": sub[nbh_col].astype(str) + " · " + sub["postal_code"].fillna("9000").astype(str) + " Gent",
+                "address": sub.apply(_make_addr, axis=1),
                 "url": "https://www.immoweb.be/nl/zoekertje/property/te-koop/gent/9000/" + pids,
                 "asking_price": asking.round().astype(int),
                 "predicted_price": pred.round().astype(int),
@@ -290,18 +339,48 @@ class LiveListingsService:
                 "band_position": band_pos,
                 "delta_eur": delta_eur.round().astype(int),
                 "delta_pct": delta_pct.round(1),
-                "livable_area": pd.to_numeric(sub["livable_area"], errors="coerce"),
-                "bedrooms": pd.to_numeric(sub["number_of_bedrooms"], errors="coerce"),
+                "livable_area": _num_col("livable_area"),
+                "property_size": _num_col("property_size"),
+                "bedrooms": _num_col("number_of_bedrooms"),
+                "bathrooms": _num_col("number_of_bathrooms"),
+                "year_built": _num_col("year_built"),
                 "condition": sub["building_condition"],
                 "energy_label": sub["energy_label"],
+                "primary_energy_consumption": _num_col("primary_energy_consumption"),
                 "property_type": ptype,
+                "property_subtype": _col("property_subtype"),
                 "neighbourhood": sub[nbh_col],
                 "neighbourhood_key": sub["neighbourhood"],
+                "postal_code": _col("postal_code"),
+                "dist_from_center": _num_col("dist_from_center", 2),
+                "has_garden": _bool_col("has_garden"),
+                "garden_surface": _num_col("garden_surface"),
+                "has_terrace": _bool_col("has_terrace"),
+                "terrace_surface": _num_col("terrace_surface"),
+                "has_lift": _bool_col("has_lift"),
+                "has_photovoltaic_panels": _bool_col("has_photovoltaic_panels"),
+                "has_heat_pump": _bool_col("has_heat_pump"),
+                "cadastral_income": _num_col("cadastral_income"),
                 "date_obtained": sub["_dt"].dt.strftime("%Y-%m-%d") if "_dt" in sub.columns else None,
-                "had_price_cut": sub["had_price_cut"].fillna(False).astype(bool) if "had_price_cut" in sub.columns else False,
+                "first_seen": _col("first_seen_str"),
+                "last_seen": _col("last_seen_str"),
+                "days_since_last_seen": days_ago,
+                "latest_scrape_date": _col("latest_scrape_date", date_used),
+                "availability_status": avail_status,
+                "listing_duration_days": _num_col("listing_duration_days"),
+                "n_snapshots": _num_col("n_snapshots"),
+                "is_under_option": is_opt,
+                "had_price_cut": _bool_col("had_price_cut"),
+                "price_cut_eur": _num_col("price_cut_eur", 0),
+                "price_cut_pct": _num_col("price_cut_pct", 1),
+                "agency": _col("agency_clean"),
+                "title": _col("title"),
+                "description_snippet": _col("description_snippet"),
+                "vision_delta_eur": _num_col("vision_delta_eur", 0),
+                "vision_delta_pct": _num_col("vision_delta_pct", 1),
                 "property_regime": sub["property_regime"].fillna("residential") if "property_regime" in sub.columns else "residential",
-                "jepa_dz_quality": pd.to_numeric(sub["jepa_dz_quality"], errors="coerce").round(2) if "jepa_dz_quality" in sub.columns else None,
-                "jepa_energy_sym": pd.to_numeric(sub["jepa_energy_sym"], errors="coerce").round(2) if "jepa_energy_sym" in sub.columns else None,
+                "jepa_dz_quality": _num_col("jepa_dz_quality", 2),
+                "jepa_energy_sym": _num_col("jepa_energy_sym", 2),
                 "source": "corpus_recent",
             })
 
@@ -331,6 +410,9 @@ class LiveListingsService:
 
         if below_band_only and "band_position" in df.columns:
             df = df[df["band_position"] == "below_band"]
+
+        if available_only and "availability_status" in df.columns:
+            df = df[df["availability_status"].isin(["active_recent", "seen_recently"])]
 
         df = df.sort_values("delta_pct", ascending=False)
         total_matched = len(df)

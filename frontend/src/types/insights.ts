@@ -254,6 +254,13 @@ export interface AffordabilityNeighbourhood {
   geojson: GeoJSON.GeoJsonObject | null;
 }
 
+export type DealAvailabilityStatus =
+  | "active_recent"
+  | "seen_recently"
+  | "under_option"
+  | "sold_or_rented"
+  | "likely_gone";
+
 export interface DealItem {
   property_id: string;
   address: string;
@@ -267,17 +274,54 @@ export interface DealItem {
   delta_eur: number;
   delta_pct: number;
   livable_area: number | null;
+  property_size?: number | null;
   bedrooms: number | null;
+  bathrooms?: number | null;
+  year_built?: number | null;
   condition: string | null;
   energy_label: string | null;
+  primary_energy_consumption?: number | null;
   property_type: string | null;
+  property_subtype?: string | null;
   neighbourhood: string | null;
+  postal_code?: string | null;
+  dist_from_center?: number | null;
+  has_garden?: boolean;
+  garden_surface?: number | null;
+  has_terrace?: boolean;
+  terrace_surface?: number | null;
+  has_lift?: boolean;
+  has_photovoltaic_panels?: boolean;
+  has_heat_pump?: boolean;
+  cadastral_income?: number | null;
   date_obtained: string | null;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  days_since_last_seen?: number | null;
+  latest_scrape_date?: string | null;
+  availability_status?: DealAvailabilityStatus | string;
+  listing_duration_days?: number | null;
+  n_snapshots?: number | null;
+  is_under_option?: boolean;
   had_price_cut?: boolean;
+  price_cut_eur?: number | null;
+  price_cut_pct?: number | null;
+  agency?: string | null;
+  title?: string | null;
+  description_snippet?: string | null;
+  vision_delta_eur?: number | null;
+  vision_delta_pct?: number | null;
   property_regime?: string | null;
   jepa_dz_quality?: number | null;
   jepa_energy_sym?: number | null;
   source: "live" | "corpus_recent" | string;
+}
+
+export interface LiveCheckResult {
+  property_id: string;
+  live_status: "online" | "offline" | "under_option" | "sold_or_rented" | "blocked" | "unknown" | "error";
+  label: string;
+  url: string;
 }
 
 export interface DealsQuery {
@@ -287,6 +331,7 @@ export interface DealsQuery {
   min_epc?: string;
   min_delta_pct?: number;
   below_band_only?: boolean;
+  available_only?: boolean;
   limit?: number;
 }
 

@@ -7,6 +7,7 @@ import type {
   AffordabilityResponse,
   DealsQuery,
   DealsResponse,
+  LiveCheckResult,
   MarketInsights,
   ModelMetadata,
 } from "../types/insights";
@@ -88,10 +89,16 @@ export const api = {
     if (params?.min_epc && params.min_epc !== "ANY") qs.set("min_epc", params.min_epc);
     if (params?.min_delta_pct != null) qs.set("min_delta_pct", String(params.min_delta_pct));
     if (params?.below_band_only) qs.set("below_band_only", "true");
+    if (params?.available_only) qs.set("available_only", "true");
     if (params?.limit) qs.set("limit", String(params.limit));
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return fetchJson<DealsResponse>(`${BASE}/deals${suffix}`);
   },
+
+  checkDealLive: (propertyId: string) =>
+    fetchJson<LiveCheckResult>(`${BASE}/deals/${encodeURIComponent(propertyId)}/check-live`, {
+      method: "POST",
+    }),
 
   getEdaReport: () => fetchJson<EdaReport>(`${BASE}/eda`),
 
