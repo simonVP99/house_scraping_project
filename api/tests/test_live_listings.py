@@ -182,10 +182,22 @@ def test_deals_endpoint_and_filters():
     assert body["deals"][0]["property_id"] == "101"
     assert body["deals"][0]["availability_status"] == "active_recent"
 
-    # max_predicted below 380k excludes 101
+    # max_predicted below 380k excludes 101; min_price & min_predicted range filters work
     resp_none = client.get("/api/deals?max_predicted=350000")
     assert resp_none.status_code == 200
     assert len(resp_none.get_json()["deals"]) == 0
+
+    resp_min_ask = client.get("/api/deals?min_price=350000")
+    assert resp_min_ask.status_code == 200
+    assert [d["property_id"] for d in resp_min_ask.get_json()["deals"]] == ["102"]
+
+    resp_min_pred = client.get("/api/deals?min_predicted=390000")
+    assert resp_min_pred.status_code == 200
+    assert [d["property_id"] for d in resp_min_pred.get_json()["deals"]] == ["102"]
+
+    resp_band = client.get("/api/deals?min_price=250000&max_price=350000&min_predicted=350000&max_predicted=400000")
+    assert resp_band.status_code == 200
+    assert [d["property_id"] for d in resp_band.get_json()["deals"]] == ["101"]
 
     # Dossier & side-by-side compare endpoints
     resp_dos = client.get("/api/properties/101/dossier")

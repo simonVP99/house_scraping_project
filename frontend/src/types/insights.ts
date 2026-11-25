@@ -339,7 +339,9 @@ export interface LiveCheckResult {
 export interface DealsQuery {
   neighbourhood?: string;
   property_type?: string;
+  min_price?: number;
   max_price?: number;
+  min_predicted?: number;
   max_predicted?: number;
   min_epc?: string;
   min_condition?: string;

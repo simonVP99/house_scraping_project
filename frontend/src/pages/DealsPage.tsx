@@ -100,6 +100,9 @@ function AvailabilityBadge({ deal }: { deal: DealItem }) {
 export default function DealsPage() {
   const [neighbourhood, setNeighbourhood] = useState("ALL");
   const [propertyType, setPropertyType] = useState("ALL");
+  const [minAsking, setMinAsking] = useState<number>(0);
+  const [maxAsking, setMaxAsking] = useState<number>(0);
+  const [minPredicted, setMinPredicted] = useState<number>(0);
   const [maxPredicted, setMaxPredicted] = useState<number>(650_000);
   const [minEpc, setMinEpc] = useState("ANY");
   const [minCondition, setMinCondition] = useState("ANY");
@@ -131,7 +134,10 @@ export default function DealsPage() {
     () => ({
       neighbourhood,
       property_type: propertyType,
-      max_predicted: maxPredicted,
+      min_price: minAsking > 0 ? minAsking : undefined,
+      max_price: maxAsking > 0 ? maxAsking : undefined,
+      min_predicted: minPredicted > 0 ? minPredicted : undefined,
+      max_predicted: maxPredicted > 0 ? maxPredicted : undefined,
       min_epc: minEpc,
       min_condition: minCondition,
       min_area: minArea > 0 ? minArea : undefined,
@@ -151,6 +157,9 @@ export default function DealsPage() {
     [
       neighbourhood,
       propertyType,
+      minAsking,
+      maxAsking,
+      minPredicted,
       maxPredicted,
       minEpc,
       minCondition,
@@ -172,6 +181,9 @@ export default function DealsPage() {
   const resetFilters = () => {
     setNeighbourhood("ALL");
     setPropertyType("ALL");
+    setMinAsking(0);
+    setMaxAsking(0);
+    setMinPredicted(0);
     setMaxPredicted(650_000);
     setMinEpc("ANY");
     setMinCondition("ANY");
@@ -396,22 +408,6 @@ export default function DealsPage() {
           </div>
 
           <div>
-            <label htmlFor="deal-budget" className="block text-xs font-medium text-muted-foreground mb-1">
-              Max Predicted ({formatEurCompact(maxPredicted)})
-            </label>
-            <input
-              id="deal-budget"
-              type="range"
-              min={200_000}
-              max={1_000_000}
-              step={25_000}
-              value={maxPredicted}
-              onChange={(e) => setMaxPredicted(Number(e.target.value))}
-              className="w-full accent-[var(--color-primary)] cursor-pointer mt-2"
-            />
-          </div>
-
-          <div>
             <label htmlFor="deal-epc" className="block text-xs font-medium text-muted-foreground mb-1">
               Min EPC Label
             </label>
@@ -464,10 +460,106 @@ export default function DealsPage() {
               <option value={15}>Deep discount ≥15%</option>
             </select>
           </div>
+
+          <div>
+            <label htmlFor="deal-regime" className="block text-xs font-medium text-muted-foreground mb-1">
+              Property Regime
+            </label>
+            <select
+              id="deal-regime"
+              value={regime}
+              onChange={(e) => setRegime(e.target.value)}
+              className={selectClass}
+            >
+              <option value="ALL">All regimes</option>
+              <option value="residential">Pure residential only</option>
+              <option value="mixed_commercial">Mixed-use / Store</option>
+              <option value="live_work">Live-work / Practice</option>
+              <option value="multi_unit_investment">Multi-unit / Investment</option>
+              <option value="rented_yield">Rented / Yield pitch</option>
+              <option value="non_standard">All non-standard</option>
+            </select>
+          </div>
         </div>
 
-        {/* Row 2: Size, Bedrooms, Regime & Local Search */}
+        {/* Row 2: Price Ranges (Asking & Phase-7 Predicted) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-end pt-3 border-t border-border/60">
+          <div className="sm:col-span-1 lg:col-span-2">
+            <span className="block text-xs font-medium text-muted-foreground mb-1">
+              Asking Price (€)
+            </span>
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                aria-label="Min Asking Price"
+                value={minAsking}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setMinAsking(v);
+                  if (maxAsking > 0 && v > maxAsking) setMaxAsking(v);
+                }}
+                className={selectClass}
+              >
+                <option value={0}>Min: Any</option>
+                {[150_000, 200_000, 250_000, 300_000, 350_000, 400_000, 450_000, 500_000, 600_000, 750_000].map((v) => (
+                  <option key={v} value={v}>Min {formatEurCompact(v)}</option>
+                ))}
+              </select>
+              <select
+                aria-label="Max Asking Price"
+                value={maxAsking}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setMaxAsking(v);
+                  if (v > 0 && minAsking > v) setMinAsking(v);
+                }}
+                className={selectClass}
+              >
+                <option value={0}>Max: Any</option>
+                {[200_000, 250_000, 300_000, 350_000, 400_000, 450_000, 500_000, 600_000, 700_000, 800_000, 1_000_000].map((v) => (
+                  <option key={v} value={v}>Max {formatEurCompact(v)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="sm:col-span-1 lg:col-span-2">
+            <span className="block text-xs font-medium text-muted-foreground mb-1">
+              Phase-7 Fair Value (€)
+            </span>
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                aria-label="Min Predicted Price"
+                value={minPredicted}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setMinPredicted(v);
+                  if (maxPredicted > 0 && v > maxPredicted) setMaxPredicted(v);
+                }}
+                className={selectClass}
+              >
+                <option value={0}>Min: Any</option>
+                {[150_000, 200_000, 250_000, 300_000, 350_000, 400_000, 450_000, 500_000, 600_000, 750_000].map((v) => (
+                  <option key={v} value={v}>Min {formatEurCompact(v)}</option>
+                ))}
+              </select>
+              <select
+                aria-label="Max Predicted Price"
+                value={maxPredicted}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setMaxPredicted(v);
+                  if (v > 0 && minPredicted > v) setMinPredicted(v);
+                }}
+                className={selectClass}
+              >
+                <option value={0}>Max: Any</option>
+                {[250_000, 300_000, 350_000, 400_000, 450_000, 500_000, 550_000, 600_000, 650_000, 750_000, 850_000, 1_000_000].map((v) => (
+                  <option key={v} value={v}>Max {formatEurCompact(v)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div>
             <label htmlFor="deal-area" className="block text-xs font-medium text-muted-foreground mb-1">
               Min Area
@@ -504,28 +596,11 @@ export default function DealsPage() {
               <option value={4}>4+ beds</option>
             </select>
           </div>
+        </div>
 
+        {/* Row 3: Local Search */}
+        <div className="pt-3 border-t border-border/60">
           <div>
-            <label htmlFor="deal-regime" className="block text-xs font-medium text-muted-foreground mb-1">
-              Property Regime
-            </label>
-            <select
-              id="deal-regime"
-              value={regime}
-              onChange={(e) => setRegime(e.target.value)}
-              className={selectClass}
-            >
-              <option value="ALL">All regimes</option>
-              <option value="residential">Pure residential only</option>
-              <option value="mixed_commercial">Mixed-use / Store</option>
-              <option value="live_work">Live-work / Practice</option>
-              <option value="multi_unit_investment">Multi-unit / Investment</option>
-              <option value="rented_yield">Rented / Yield pitch</option>
-              <option value="non_standard">All non-standard</option>
-            </select>
-          </div>
-
-          <div className="sm:col-span-2 lg:col-span-3">
             <label htmlFor="deal-search" className="block text-xs font-medium text-muted-foreground mb-1">
               Search Local Corpus (street, agency, title, or Immoweb #ID)
             </label>

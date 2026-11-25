@@ -256,7 +256,9 @@ def create_app(loader=None, pred_service=None, listings_service=None):
         payload = live_listings_service.get_deals(
             neighbourhood=request.args.get("neighbourhood"),
             property_type=request.args.get("property_type"),
+            min_price=_f("min_price"),
             max_price=_f("max_price"),
+            min_predicted=_f("min_predicted"),
             max_predicted=_f("max_predicted"),
             min_epc=request.args.get("min_epc"),
             min_condition=request.args.get("min_condition"),

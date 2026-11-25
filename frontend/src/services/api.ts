@@ -87,8 +87,10 @@ export const api = {
     const qs = new URLSearchParams();
     if (params?.neighbourhood && params.neighbourhood !== "ALL") qs.set("neighbourhood", params.neighbourhood);
     if (params?.property_type && params.property_type !== "ALL") qs.set("property_type", params.property_type);
-    if (params?.max_price) qs.set("max_price", String(params.max_price));
-    if (params?.max_predicted) qs.set("max_predicted", String(params.max_predicted));
+    if (params?.min_price && params.min_price > 0) qs.set("min_price", String(params.min_price));
+    if (params?.max_price && params.max_price > 0) qs.set("max_price", String(params.max_price));
+    if (params?.min_predicted && params.min_predicted > 0) qs.set("min_predicted", String(params.min_predicted));
+    if (params?.max_predicted && params.max_predicted > 0) qs.set("max_predicted", String(params.max_predicted));
     if (params?.min_epc && params.min_epc !== "ANY") qs.set("min_epc", params.min_epc);
     if (params?.min_condition && params.min_condition !== "ANY") qs.set("min_condition", params.min_condition);
     if (params?.min_area && params.min_area > 0) qs.set("min_area", String(params.min_area));

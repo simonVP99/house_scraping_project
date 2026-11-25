@@ -206,7 +206,9 @@ class LiveListingsService:
         *,
         neighbourhood: str | None = None,
         property_type: str | None = None,
+        min_price: float | None = None,
         max_price: float | None = None,
+        min_predicted: float | None = None,
         max_predicted: float | None = None,
         min_epc: str | None = None,
         min_condition: str | None = None,
@@ -425,8 +427,14 @@ class LiveListingsService:
         if property_type and property_type.upper() in ("HOUSE", "APARTMENT"):
             df = df[df["property_type"].astype(str).str.upper() == property_type.upper()]
 
+        if min_price is not None and min_price > 0:
+            df = df[pd.to_numeric(df["asking_price"], errors="coerce") >= min_price]
+
         if max_price is not None and max_price > 0:
             df = df[pd.to_numeric(df["asking_price"], errors="coerce") <= max_price]
+
+        if min_predicted is not None and min_predicted > 0:
+            df = df[pd.to_numeric(df["predicted_price"], errors="coerce") >= min_predicted]
 
         if max_predicted is not None and max_predicted > 0:
             df = df[pd.to_numeric(df["predicted_price"], errors="coerce") <= max_predicted]
