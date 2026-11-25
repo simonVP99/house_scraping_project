@@ -1,208 +1,144 @@
-import { useState } from "react";
-import {
-  useReactTable,
-  getCoreRowModel,
-  getSortedRowModel,
-  getFilteredRowModel,
-  flexRender,
-  type SortingState,
-  type ColumnDef,
-} from "@tanstack/react-table";
+import { useState, useMemo } from "react";
+import { ArrowUpDown, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { ArrowUpDown, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
 import type { LiveListing } from "../types/property";
+import { formatEur, formatEurCompact, formatPctSigned, formatCondition } from "../lib/format";
 
 interface Props {
   listings: LiveListing[];
 }
 
-function fmtEur(v: number) {
-  return `\u20AC${v.toLocaleString("nl-BE")}`;
-}
+type SortKey = "asking_price" | "predicted_price" | "delta_pct" | "livable_area" | "bedrooms";
 
-const columns: ColumnDef<LiveListing>[] = [
-  {
-    accessorKey: "address",
-    header: "Address",
-    cell: ({ row }) => (
-      <a
-        href={row.original.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary hover:underline inline-flex items-center gap-1"
-      >
-        {row.original.address || `Property ${row.original.property_id}`}
-        <ExternalLink className="h-3 w-3 flex-shrink-0" />
-      </a>
-    ),
-    filterFn: (row, _columnId, filterValue: string) => {
-      const addr = (row.getValue("address") as string).toLowerCase();
-      return addr.includes(filterValue.toLowerCase());
-    },
-  },
-  {
-    accessorKey: "asking_price",
-    header: "Asking (€)",
-    cell: ({ getValue }) => fmtEur(getValue() as number),
-  },
-  {
-    accessorKey: "predicted_price",
-    header: "Predicted (€)",
-    cell: ({ row }) => {
-      const p = row.original.predicted_price;
-      const lo = row.original.low_eur;
-      const hi = row.original.high_eur;
-      return (
-        <div className="tabular-nums">
-          <div>{fmtEur(p)}</div>
-          {lo != null && hi != null && (
-            <div className="text-[11px] text-muted-foreground">
-              {fmtEur(lo)} {"\u2013"} {fmtEur(hi)}
-            </div>
-          )}
-        </div>
-      );
-    },
-  },
-  {
-    accessorKey: "delta_pct",
-    header: "Δ %",
-    cell: ({ getValue }) => {
-      const v = getValue() as number;
-      return (
-        <span className={v > 0 ? "text-positive font-medium" : "text-negative font-medium"}>
-          {v > 0 ? "+" : ""}{v.toFixed(1)}%
-        </span>
-      );
-    },
-  },
-  {
-    accessorKey: "livable_area",
-    header: "Area (m²)",
-    cell: ({ getValue }) => {
-      const v = getValue() as number | null;
-      return v != null ? v : "\u2014";
-    },
-    sortUndefined: "last",
-  },
-  {
-    accessorKey: "bedrooms",
-    header: "Beds",
-    cell: ({ getValue }) => {
-      const v = getValue() as number | null;
-      return v != null ? v : "\u2014";
-    },
-    sortUndefined: "last",
-  },
-  {
-    accessorKey: "condition",
-    header: "Condition",
-    cell: ({ getValue }) => {
-      const v = getValue() as string | null;
-      return v ? v.replace(/_/g, " ") : "\u2014";
-    },
-  },
-  {
-    accessorKey: "energy_label",
-    header: "Energy",
-    cell: ({ getValue }) => (getValue() as string | null) ?? "\u2014",
-  },
-];
-
-function SortIcon({ sorted }: { sorted: false | "asc" | "desc" }) {
-  if (sorted === "asc") return <ArrowUp className="ml-1 inline h-3.5 w-3.5" />;
-  if (sorted === "desc") return <ArrowDown className="ml-1 inline h-3.5 w-3.5" />;
-  return <ArrowUpDown className="ml-1 inline h-3.5 w-3.5 opacity-30" />;
+function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
+  if (!active) return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-35" />;
+  return dir === "asc" ? (
+    <ArrowUp className="ml-1 inline h-3 w-3 text-primary" />
+  ) : (
+    <ArrowDown className="ml-1 inline h-3 w-3 text-primary" />
+  );
 }
 
 export default function LiveListingsTable({ listings }: Props) {
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "delta_pct", desc: true },
-  ]);
-  const [globalFilter, setGlobalFilter] = useState("");
+  const [filter, setFilter] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("delta_pct");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  const table = useReactTable({
-    data: listings,
-    columns,
-    state: { sorting, globalFilter },
-    onSortingChange: setSorting,
-    onGlobalFilterChange: setGlobalFilter,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    globalFilterFn: (row, _columnId, filterValue: string) => {
-      const addr = (row.getValue("address") as string).toLowerCase();
-      return addr.includes(filterValue.toLowerCase());
-    },
-  });
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
+  const rows = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    const filtered = q
+      ? listings.filter(
+          (l) =>
+            (l.address ?? "").toLowerCase().includes(q) ||
+            (l.neighbourhood ?? "").toLowerCase().includes(q) ||
+            (l.energy_label ?? "").toLowerCase().includes(q),
+        )
+      : listings;
+
+    return [...filtered].sort((a, b) => {
+      const av = Number(a[sortKey] ?? -Infinity);
+      const bv = Number(b[sortKey] ?? -Infinity);
+      return sortDir === "asc" ? av - bv : bv - av;
+    });
+  }, [listings, filter, sortKey, sortDir]);
+
+  if (listings.length === 0) return null;
 
   return (
-    <Card>
-      <CardContent className="pt-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">
-            Properties for Sale ({listings.length})
-          </h3>
-          <Input
-            placeholder="Filter by address..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            className="max-w-xs"
-          />
-        </div>
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => {
-                    const isFirst = header.index === 0;
-                    return (
-                      <TableHead
-                        key={header.id}
-                        className={`${!isFirst ? "text-right" : ""} cursor-pointer select-none hover:bg-muted/50`}
-                        onClick={header.column.getToggleSortingHandler()}
-                      >
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        <SortIcon sorted={header.column.getIsSorted()} />
-                      </TableHead>
-                    );
-                  })}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.length ? (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => {
-                      const isFirst = cell.column.getIndex() === 0;
-                      return (
-                        <TableCell key={cell.id} className={!isFirst ? "text-right" : ""}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      );
-                    })}
-                  </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={columns.length} className="h-24 text-center">
-                    No listings match your filter.
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs text-muted-foreground">
+          {rows.length} of {listings.length} live scraped listings
+        </span>
+        <Input
+          placeholder="Filter street, type, EPC..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="max-w-xs h-8 text-xs"
+        />
+      </div>
+
+      <div className="rounded-lg border border-border overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="text-xs">Property</TableHead>
+              <TableHead onClick={() => toggleSort("asking_price")} className="text-xs text-right cursor-pointer select-none">
+                Asking <SortIcon active={sortKey === "asking_price"} dir={sortDir} />
+              </TableHead>
+              <TableHead onClick={() => toggleSort("predicted_price")} className="text-xs text-right cursor-pointer select-none">
+                Fair Value (80%) <SortIcon active={sortKey === "predicted_price"} dir={sortDir} />
+              </TableHead>
+              <TableHead onClick={() => toggleSort("delta_pct")} className="text-xs text-right cursor-pointer select-none">
+                Delta <SortIcon active={sortKey === "delta_pct"} dir={sortDir} />
+              </TableHead>
+              <TableHead onClick={() => toggleSort("livable_area")} className="text-xs text-right cursor-pointer select-none">
+                Area <SortIcon active={sortKey === "livable_area"} dir={sortDir} />
+              </TableHead>
+              <TableHead className="text-xs">Cond. / EPC</TableHead>
+              <TableHead className="text-xs text-right">Link</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((l) => {
+              const isDeal = l.delta_pct != null && l.delta_pct > 0;
+              return (
+                <TableRow key={l.property_id}>
+                  <TableCell>
+                    <p className="text-sm font-medium">{l.address || "Listing"}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {l.bedrooms != null ? `${l.bedrooms} bed` : ""}{l.bedrooms != null && l.neighbourhood ? " · " : ""}{l.neighbourhood}
+                    </p>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    {formatEur(l.asking_price)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <p className="text-sm font-semibold">{formatEur(l.predicted_price)}</p>
+                    {l.low_eur != null && l.high_eur != null && (
+                      <p className="text-[10px] text-muted-foreground">
+                        {formatEurCompact(l.low_eur)}–{formatEurCompact(l.high_eur)}
+                      </p>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <span className={`text-sm font-bold ${isDeal ? "text-positive" : "text-negative"}`}>
+                      {formatPctSigned(l.delta_pct)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    {l.livable_area ? `${Math.round(l.livable_area)} m²` : "—"}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatCondition(l.condition)} {l.energy_label ? `· EPC ${l.energy_label}` : ""}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <a
+                      href={l.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                    >
+                      View <ExternalLink className="w-3 h-3" />
+                    </a>
                   </TableCell>
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Click column headers to sort. {table.getRowModel().rows.length} of {listings.length} shown.
-        </p>
-      </CardContent>
-    </Card>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   );
 }

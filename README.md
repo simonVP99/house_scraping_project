@@ -29,11 +29,12 @@ Trained by `src/train_production.py` and served via `src/production_pipeline.py`
 
 ## Common Commands
 
-### 1. Train / Refresh Production Bundle
+### 1. Train / Refresh Production Bundle & Market Insights
 ```bash
 PYTHONPATH=src .venv-api/bin/python -u src/train_production.py
+PYTHONPATH=src .venv-api/bin/python -u src/build_market_insights.py
 ```
-Outputs `outputs/models/production/{feature_pipeline.joblib,track_tabular_text.joblib,track_multimodal.joblib,metadata.json}`.
+Outputs `outputs/models/production/{feature_pipeline.joblib,track_tabular_text.joblib,track_multimodal.joblib,metadata.json,oof_analytics.parquet,market_insights.json}`.
 
 ### 2. Run Backend API (Flask, port `5001`)
 ```bash
@@ -41,6 +42,9 @@ Outputs `outputs/models/production/{feature_pipeline.joblib,track_tabular_text.j
 ```
 Key endpoints:
 - `GET  /api/health`
+- `GET  /api/model/metadata`
+- `GET  /api/insights`
+- `POST /api/affordability`
 - `GET  /api/predict/url?url=<immoweb-url>`
 - `POST /api/predict/form`
 - `POST /api/predict/manual`

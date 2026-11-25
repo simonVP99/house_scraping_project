@@ -48,12 +48,12 @@ function compact(n: number | null | undefined): string {
   return String(Math.round(n));
 }
 
-export default function EdaPage() {
+export default function EdaPage({ embedded = false }: { embedded?: boolean }) {
   const { data, isLoading, error } = useEdaReport();
   const [tab, setTab] = useState<Tab>("overview");
 
   if (isLoading) {
-    return <div className="text-muted-foreground">Loading EDA report...</div>;
+    return <div className="text-muted-foreground py-8">Loading full dataset EDA report...</div>;
   }
   if (error) {
     return (
@@ -69,14 +69,16 @@ export default function EdaPage() {
   if (!data) return null;
 
   return (
-    <div className="space-y-6">
+    <div className={embedded ? "space-y-6" : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6"}>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl font-bold tracking-tight">
-            Dataset EDA
-          </h1>
-          <p className="text-muted-foreground">
-            {data.dataset.rows.toLocaleString()} scraped listings ·{" "}
+          {!embedded && (
+            <h1 className="font-display text-3xl font-bold tracking-tight">
+              Dataset EDA
+            </h1>
+          )}
+          <p className="text-sm text-muted-foreground">
+            {data.dataset.rows.toLocaleString()} scraped snapshots ·{" "}
             {data.dataset.columns} fields · {data.dataset.priced_rows.toLocaleString()}{" "}
             usable prices
           </p>
@@ -120,7 +122,9 @@ function Overview({ data }: { data: EdaReport }) {
   const nearEmpty = data.fields.filter((f) => f.null_pct >= 95).length;
   const bands = Object.entries(data.missingness.bands);
 
-  const top = data.correlations.filter((c) => !c.is_leaky).slice(0, 14);
+  const top = data.correlations
+    .filter((c) => !c.is_leaky && c.field !== "price_old_value")
+    .slice(0, 14);
 
   return (
     <div className="space-y-6">

@@ -77,7 +77,10 @@ SHAP_LABEL_MAP = {
     "fl_mobiscore": "Mobiscore",
     "fl_mobiscore_x_area": "Mobiscore × area",
     "fl_heritage_count_150m": "Heritage surroundings",
+    "fl_dist_monument_m": "Distance to monument",
     "fl_dist_navigable_water_m": "Distance to water",
+    "fl_dist_park_m": "Distance to park",
+    "fl_dist_primary_school_m": "Distance to school",
     "fl_no2_2025_ugm3": "Air quality (NO₂)",
     "grb_bldg_footprint": "Building footprint (GRB)",
     "grb_parcel_area": "Parcel area (GRB)",
@@ -87,21 +90,37 @@ SHAP_LABEL_MAP = {
     "grb_adjoining_bldgs": "Building detachment (GRB)",
     "sp_prior_price": "Local comparable price",
     "sp_log_prior_price": "Local comparable price",
+    "sp_idw_price_k15": "Nearby property prices (15-NN)",
+    "sp_idw_price_k5": "Immediate property prices (5-NN)",
+    "sp_idw_price_k40": "Area property prices (40-NN)",
     "sp_same_type_idw_psqm_k15": "Nearby same-type €/m²",
     "sp_same_type_idw_psqm_k5": "Immediate same-type €/m²",
+    "sp_same_type_idw_psqm_k40": "Area same-type €/m²",
     "sp_idw_psqm_k15": "Local neighbourhood €/m²",
+    "sp_idw_psqm_k5": "Immediate €/m²",
+    "sp_idw_psqm_k40": "Wider area €/m²",
     "sp_type_wijk_psqm": "Neighbourhood €/m²",
     "sp_type_sector_psqm": "Statistical sector €/m²",
+    "sp_type_postal_psqm": "Postal code €/m²",
     "te_street_log_psqm": "Street price level",
     "sector_median_income": "Sector median income",
     "log_sector_income_x_area": "Sector income × area",
-    "txt_tab_plus_text_psqm": "Listing description signal",
-    "txt_blend_psqm": "Listing description signal",
+    "txt_tab_plus_text_psqm": "Description signal",
+    "txt_blend_psqm": "Description signal",
     "txt_super_tabresid": "Description quality signal",
-    "txt_e5l_a5_price": "Description semantic value",
-    "txt_tfidf_a2_price": "Description keyword value",
+    "txt_e5l_a5_price": "Description semantic signal",
+    "txt_e5l_a12_psqm": "Description semantic signal",
+    "txt_tfidf_a2_price": "Description keyword signal",
+    "txt_tfidf_a14_psqm": "Description keyword signal",
+    "txt_tfidf_spresid": "Description vs location signal",
+    "txt_tfidf_tabresid": "Description quality signal",
+    "txt_e5l_tabresid": "Description quality signal",
+    "txt_sgd_psqm": "Description signal",
     "vis_blend_psqm": "Photo visual appeal",
     "vis_blend_tabtxt_resid": "Photo condition adjustment",
+    "section_exterior": "Listing exterior photos",
+    "section_interior": "Listing interior photos",
+    "pictures_per_bedroom": "Photo coverage",
 }
 
 
@@ -112,8 +131,8 @@ def _extract_property_id(url: str | None) -> str | None:
     return m.group(1) if m else None
 
 
-def _is_latent_feature(name: str) -> bool:
-    return (
+def _is_latent_feature(name: str, hide_listing_meta: bool = False) -> bool:
+    if (
         name.startswith("e5l_pca_")
         or name.startswith("tfidf_svd_")
         or name.startswith("vis_sig_pca_")
@@ -123,10 +142,18 @@ def _is_latent_feature(name: str) -> bool:
         or name.startswith("belgian_")
         or name.startswith("euribor")
         or name in ("be_mortgage_rate_avg", "yield_curve_slope", "pub_month_sin", "pub_month_cos")
-    )
+    ):
+        return True
+    if hide_listing_meta and (
+        name.startswith("section_")
+        or name.startswith("txt_")
+        or name in ("pictures_per_bedroom", "picture_count", "description_length", "title_length")
+    ):
+        return True
+    return False
 
 
-def format_shap_payload(shap_raw: dict[str, Any] | None) -> dict[str, Any] | None:
+def format_shap_payload(shap_raw: dict[str, Any] | None, *, is_manual: bool = False) -> dict[str, Any] | None:
     """Convert raw TreeSHAP EUR contributions from `TrackBundle.explain_row_shap` to API schema."""
     if not shap_raw:
         return None
@@ -141,20 +168,34 @@ def format_shap_payload(shap_raw: dict[str, Any] | None) -> dict[str, Any] | Non
 
     for feat, val in zip(feature_names, eur_vals):
         v = float(val)
-        if _is_latent_feature(feat):
-            if feat.startswith("e5l_pca_") or feat.startswith("tfidf_svd_"):
+        if _is_latent_feature(feat, hide_listing_meta=is_manual):
+            if feat.startswith("e5l_pca_") or feat.startswith("tfidf_svd_") or feat.startswith("txt_"):
                 latent_text_sum += v
-            elif feat.startswith("vis_"):
+            elif feat.startswith("vis_") or feat.startswith("section_") or "picture" in feat:
                 latent_vis_sum += v
             else:
                 latent_geo_macro_sum += v
         else:
             pairs.append((feat, v))
 
-    pairs.sort(key=lambda x: abs(x[1]), reverse=True)
-    shap_items = []
-    for feat, val in pairs[:15]:
+    # Merge contributions that share the same human-readable label (e.g., energy_label + epc_ordinal)
+    merged: dict[str, tuple[str, float]] = {}
+    for feat, val in pairs:
         label = SHAP_LABEL_MAP.get(feat, feat.replace("_", " ").title())
+        if label in merged:
+            rep_key, cur_val = merged[label]
+            # Keep the key with larger absolute contribution as representative
+            merged[label] = (feat if abs(val) > abs(cur_val) else rep_key, cur_val + val)
+        else:
+            merged[label] = (feat, val)
+
+    ranked = sorted(
+        [(label, rep_key, val) for label, (rep_key, val) in merged.items()],
+        key=lambda x: abs(x[2]),
+        reverse=True,
+    )
+    shap_items = []
+    for label, feat, val in ranked[:15]:
         shap_items.append({
             "feature": label,
             "feature_key": feat,
@@ -162,11 +203,11 @@ def format_shap_payload(shap_raw: dict[str, Any] | None) -> dict[str, Any] | Non
             "value_eur": round(val),
         })
 
-    # Remaining non-top-15 + latent buckets so contributions remain transparent
-    tail_sum = sum(v for _, v in pairs[15:]) + latent_text_sum + latent_geo_macro_sum + latent_vis_sum
+    # Remaining non-top-15 + latent buckets so contributions sum cleanly
+    tail_sum = sum(v for _, _, v in ranked[15:]) + latent_text_sum + latent_geo_macro_sum + latent_vis_sum
     if abs(tail_sum) >= 500:
         shap_items.append({
-            "feature": "Description, photo & other signals",
+            "feature": "Other & latent signals",
             "feature_key": "_other",
             "value_k": round(tail_sum / 1000.0, 2),
             "value_eur": round(tail_sum),
@@ -309,6 +350,8 @@ class PredictionService:
         city_parts = " ".join(p for p in [str(row.get("postal_code") or "").strip(), str(row.get("city") or "").strip()] if p)
         address = ", ".join(p for p in [address_parts, city_parts] if p)
 
+        has_text = bool((row.get("description") or "").strip() or (row.get("description_nl") or "").strip())
+        shap_payload = format_shap_payload(pred_out.get("shap_raw"), is_manual=not has_text)
         result = {
             "property": {
                 "property_id": row.get("property_id"),
@@ -340,7 +383,7 @@ class PredictionService:
                 "model_version": self.bundle.metadata.get("model_version", "phase7-lean5"),
             },
             "form_data": _clean_form_dict(row),
-            "shap": format_shap_payload(pred_out.get("shap_raw")),
+            "shap": shap_payload,
         }
 
         self._add_explainability(result, row)

@@ -1,15 +1,31 @@
 import os
 import json
 import math
+import re
 from datetime import datetime
 import pandas as pd
 import numpy as np
 from scipy.spatial import cKDTree
 from shapely.geometry import shape, Point
 from api.config import (
-    EMBEDDINGS_CSV_PATH, TODAY_DEALS_CSV_PATH,
+    OOF_ANALYTICS_PATH,
+    EMBEDDINGS_CSV_PATH,
+    TODAY_DEALS_CSV_PATH,
     NEIGHBOURHOOD_DATA_PATH,
 )
+
+
+def _prettify_wijk(name: str, display_map: dict | None = None) -> str:
+    if not name or pd.isna(name):
+        return "Other Ghent"
+    s = str(name)
+    if display_map and s in display_map:
+        return display_map[s]
+    if s == "Unknown":
+        return "Greater Ghent / Unmapped"
+    s = s.replace("_", " ")
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s)
+    return s.strip()
 
 
 def _clean_nan(records):
@@ -24,6 +40,7 @@ def _clean_nan(records):
 class DataLoader:
     def __init__(self):
         self.neighbourhood_polygons = []
+        self.neighbourhood_display_map = {}
         self.analytics_df = None
         self.neighbourhood_summary = None
         self.today_deals_df = None
@@ -34,6 +51,7 @@ class DataLoader:
 
     def _load_neighbourhood_polygons(self):
         self.neighbourhood_polygons = []
+        self.neighbourhood_display_map = {}
         try:
             if not os.path.exists(NEIGHBOURHOOD_DATA_PATH):
                 return
@@ -44,17 +62,48 @@ class DataLoader:
                     poly = shape(geo_json)
                     name = row["wijk"]
                     self.neighbourhood_polygons.append((poly, name))
+                    norm = str(name).replace(" ", "").replace("-", "_")
+                    pretty = re.sub(r"\s*-\s*", " – ", str(name).strip())
+                    pretty = pretty.replace("en – zone", "en-zone")
+                    self.neighbourhood_display_map[norm] = pretty
+                    self.neighbourhood_display_map[str(name)] = pretty
                 except Exception:
                     continue
         except Exception as e:
             print(f"Error loading neighbourhood data: {e}")
 
     def _load_data(self):
-        """Load embeddings CSV and today_deals CSV into memory."""
-        if os.path.exists(EMBEDDINGS_CSV_PATH):
+        """Load Phase-7 OOF analytics parquet (preferred) or fall back to legacy CSV."""
+        if os.path.exists(OOF_ANALYTICS_PATH):
+            df = pd.read_parquet(OOF_ANALYTICS_PATH)
+            # Store raw EUR in price_eur and keep price in kEUR for backwards-compatible callers/tests
+            df["price_eur"] = pd.to_numeric(df["price"], errors="coerce")
+            df["price"] = df["price_eur"] / 1000.0
+            for col in ["listing_duration_days", "livable_area"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            if "price_per_sqm" not in df.columns:
+                df["price_per_sqm"] = np.where(
+                    df["livable_area"] > 0,
+                    df["price_eur"] / df["livable_area"],
+                    np.nan,
+                )
+            df["is_under_option"] = df.get("is_under_option", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+            if "property_type_label" not in df.columns and "property_type_HOUSE" in df.columns:
+                df["property_type_label"] = np.where(df["property_type_HOUSE"] == 1, "House", "Apartment")
+            if "neighbourhood_display" not in df.columns:
+                df["neighbourhood_display"] = df["neighbourhood"].map(
+                    lambda x: _prettify_wijk(x, self.neighbourhood_display_map)
+                )
+            self.analytics_df = df
+            self._build_spatial_tree()
+            self._compute_neighbourhood_summary()
+            print(f"Loaded Phase-7 OOF analytics: {len(df)} properties")
+        elif os.path.exists(EMBEDDINGS_CSV_PATH):
             df = pd.read_csv(EMBEDDINGS_CSV_PATH)
             for col in ["price", "listing_duration_days", "livable_area"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
+            df["price_eur"] = df["price"] * 1000.0
             df["price_per_sqm"] = np.where(
                 df["livable_area"] > 0,
                 df["price"] * 1000 / df["livable_area"],
@@ -65,17 +114,21 @@ class DataLoader:
                 df["property_type_label"] = np.where(
                     df["property_type_HOUSE"] == 1, "House", "Apartment"
                 )
+            df["neighbourhood_display"] = df["neighbourhood"].map(
+                lambda x: _prettify_wijk(x, self.neighbourhood_display_map)
+            )
             self.analytics_df = df
             self._build_spatial_tree()
             self._compute_neighbourhood_summary()
         else:
-            print(f"Embeddings CSV not found at {EMBEDDINGS_CSV_PATH}")
+            print(f"Analytics data not found at {OOF_ANALYTICS_PATH} or {EMBEDDINGS_CSV_PATH}")
 
         if os.path.exists(TODAY_DEALS_CSV_PATH):
             self.today_deals_df = pd.read_csv(TODAY_DEALS_CSV_PATH)
-            # Merge predicted delta_pct into analytics_df for neighbourhood stats
+            # Only merge legacy today_deals delta_pct when OOF Phase-7 delta_pct isn't already present
             if (
                 self.analytics_df is not None
+                and "delta_pct" not in self.analytics_df.columns
                 and self.today_deals_df is not None
                 and "delta_pct" in self.today_deals_df.columns
                 and "property_id" in self.today_deals_df.columns
@@ -106,12 +159,17 @@ class DataLoader:
         return spatial_lag_10, avg_dist_5nn
 
     def _compute_neighbourhood_summary(self):
-        """Aggregate per-neighbourhood statistics."""
+        """Aggregate per-neighbourhood statistics (excluding unmapped Unknown rows)."""
         df = self.analytics_df
         if df is None:
             return
 
-        grouped = df.groupby("neighbourhood")
+        # Exclude unmapped 'Unknown' rows from the neighbourhood comparison & choropleth
+        mapped = df[df["neighbourhood"].notna() & (df["neighbourhood"] != "Unknown")].copy()
+        if len(mapped) == 0:
+            mapped = df.copy()
+
+        grouped = mapped.groupby("neighbourhood")
         summary = grouped.agg(
             count=("price", "size"),
             median_price_k=("price", "median"),
@@ -121,9 +179,16 @@ class DataLoader:
             pct_under_option=("is_under_option", "mean"),
         ).reset_index()
 
-        has_delta = "delta_pct" in df.columns and df["delta_pct"].notna().any()
+        if "had_price_cut" in mapped.columns:
+            cut_stats = mapped.groupby("neighbourhood")["had_price_cut"].mean().mul(100).round(1).reset_index(name="pct_price_cut")
+            summary = summary.merge(cut_stats, on="neighbourhood", how="left")
+        if "pred_mm_eur" in mapped.columns:
+            fair_stats = mapped.groupby("neighbourhood")["pred_mm_eur"].median().round(0).reset_index(name="median_fair_eur")
+            summary = summary.merge(fair_stats, on="neighbourhood", how="left")
+
+        has_delta = "delta_pct" in mapped.columns and mapped["delta_pct"].notna().any()
         if has_delta:
-            delta_stats = df[df["delta_pct"].notna()].groupby("neighbourhood").agg(
+            delta_stats = mapped[mapped["delta_pct"].notna()].groupby("neighbourhood").agg(
                 median_delta_pct=("delta_pct", "median"),
                 pct_underpriced=("delta_pct", lambda x: (x > 0).mean()),
             ).reset_index()
@@ -132,6 +197,9 @@ class DataLoader:
             summary["median_delta_pct"] = np.nan
             summary["pct_underpriced"] = np.nan
 
+        display_map = getattr(self, "neighbourhood_display_map", {})
+        summary["display_name"] = summary["neighbourhood"].map(lambda x: _prettify_wijk(x, display_map))
+        summary["median_price_eur"] = (summary["median_price_k"] * 1000).round(0)
         summary["pct_under_option"] = (summary["pct_under_option"] * 100).round(1)
         summary["pct_underpriced"] = (summary["pct_underpriced"] * 100).round(1)
         summary["avg_listing_duration"] = summary["avg_listing_duration"].round(1)
@@ -139,7 +207,7 @@ class DataLoader:
         summary["median_price_sqm"] = summary["median_price_sqm"].round(0)
         summary["median_delta_pct"] = summary["median_delta_pct"].round(1)
         summary = summary.sort_values(
-            "median_delta_pct", ascending=False, na_position="last"
+            "median_price_sqm", ascending=False, na_position="last"
         )
 
         self.neighbourhood_summary = summary
@@ -149,12 +217,17 @@ class DataLoader:
         df = self.analytics_df
         if df is None:
             return {}
+        mapped_nbhs = df[df["neighbourhood"].notna() & (df["neighbourhood"] != "Unknown")]["neighbourhood"].nunique()
+        med_k = float(df["price"].median())
         return {
             "total_properties": len(df),
-            "num_neighbourhoods": df["neighbourhood"].nunique(),
-            "median_price_k": round(float(df["price"].median()), 1),
+            "num_neighbourhoods": int(mapped_nbhs or df["neighbourhood"].nunique()),
+            "median_price_k": round(med_k, 1),
+            "median_price_eur": int(round(med_k * 1000)),
+            "median_price_sqm": int(round(float(df["price_per_sqm"].median()))) if "price_per_sqm" in df.columns and df["price_per_sqm"].notna().any() else None,
             "avg_listing_duration": round(float(df["listing_duration_days"].mean()), 1),
             "pct_under_option": round(float(df["is_under_option"].mean() * 100), 1),
+            "pct_price_cut": round(float(df["had_price_cut"].mean() * 100), 1) if "had_price_cut" in df.columns else None,
             "median_delta_pct": round(
                 float(df["delta_pct"].median()) if "delta_pct" in df.columns and df["delta_pct"].notna().any() else 0, 1
             ),
@@ -179,13 +252,25 @@ class DataLoader:
             return None
 
         # Stats
+        med_k = float(nbh_df["price"].median())
+        min_k = float(nbh_df["price"].min())
+        max_k = float(nbh_df["price"].max())
+        display_map = getattr(self, "neighbourhood_display_map", {})
         stats = {
             "count": len(nbh_df),
-            "median_price_k": round(float(nbh_df["price"].median()), 1),
-            "min_price_k": round(float(nbh_df["price"].min()), 1),
-            "max_price_k": round(float(nbh_df["price"].max()), 1),
+            "display_name": _prettify_wijk(name, display_map),
+            "median_price_k": round(med_k, 1),
+            "median_price_eur": int(round(med_k * 1000)),
+            "median_price_sqm": int(round(float(nbh_df["price_per_sqm"].median()))) if "price_per_sqm" in nbh_df.columns and nbh_df["price_per_sqm"].notna().any() else None,
+            "min_price_k": round(min_k, 1),
+            "max_price_k": round(max_k, 1),
+            "min_price_eur": int(round(min_k * 1000)),
+            "max_price_eur": int(round(max_k * 1000)),
             "avg_area": round(float(nbh_df["livable_area"].mean()), 0),
+            "median_area": round(float(nbh_df["livable_area"].median()), 0),
             "avg_age": round(float(nbh_df["age"].mean()), 0) if "age" in nbh_df.columns else None,
+            "pct_houses": round(float((nbh_df["property_type_HOUSE"] == 1).mean() * 100), 1) if "property_type_HOUSE" in nbh_df.columns else None,
+            "pct_price_cut": round(float(nbh_df["had_price_cut"].mean() * 100), 1) if "had_price_cut" in nbh_df.columns else None,
             "top_condition": nbh_df["building_condition"].mode().iloc[0]
                 if "building_condition" in nbh_df.columns and len(nbh_df["building_condition"].dropna()) > 0
                 else None,
@@ -194,27 +279,54 @@ class DataLoader:
                 else None,
         }
 
-        # Monthly price trend: neighbourhood vs city
+        # Monthly price trend: neighbourhood vs city over a continuous monthly timeline
         trend = []
         df_dated = df[df["date_obtained"].notna()].copy()
         if len(df_dated) > 0:
             df_dated["date_obtained"] = pd.to_datetime(df_dated["date_obtained"], errors="coerce")
             df_dated = df_dated[df_dated["date_obtained"].notna()]
-            df_dated["month"] = df_dated["date_obtained"].dt.to_period("M").astype(str)
+            df_dated["month"] = df_dated["date_obtained"].dt.to_period("M")
 
-            city_trend = df_dated.groupby("month")["price"].median().reset_index()
+            city_counts = df_dated.groupby("month")["price"].size()
+            city_trend = df_dated.groupby("month")["price"].median()
             nbh_dated = df_dated[df_dated["neighbourhood"] == name]
-            nbh_trend = nbh_dated.groupby("month")["price"].median().reset_index()
+            nbh_counts = nbh_dated.groupby("month")["price"].size()
+            nbh_trend = nbh_dated.groupby("month")["price"].median()
 
-            months = sorted(set(city_trend["month"].tolist() + nbh_trend["month"].tolist()))
-            city_dict = dict(zip(city_trend["month"], city_trend["price"]))
-            nbh_dict = dict(zip(nbh_trend["month"], nbh_trend["price"]))
+            min_p = df_dated["month"].min()
+            max_p = df_dated["month"].max()
+            all_months = pd.period_range(min_p, max_p, freq="M")
 
-            for m in months:
+            for p in all_months:
+                m_str = str(p)
+                c_val = float(city_trend.loc[p]) if p in city_trend.index and int(city_counts.loc[p]) >= 10 else None
+                n_val = float(nbh_trend.loc[p]) if p in nbh_trend.index and int(nbh_counts.loc[p]) >= 3 else None
                 trend.append({
-                    "month": m,
-                    "city_median_price_k": round(float(city_dict.get(m, 0)), 1) if m in city_dict else None,
-                    "neighbourhood_median_price_k": round(float(nbh_dict.get(m, 0)), 1) if m in nbh_dict else None,
+                    "month": m_str,
+                    "city_median_price_k": round(c_val, 1) if c_val is not None else None,
+                    "neighbourhood_median_price_k": round(n_val, 1) if n_val is not None else None,
+                    "city_median_price_eur": int(round(c_val * 1000)) if c_val is not None else None,
+                    "neighbourhood_median_price_eur": int(round(n_val * 1000)) if n_val is not None else None,
+                })
+
+        # Top Phase-7 OOF value highlights in this neighbourhood (recent listings)
+        recent_scored = []
+        if "pred_mm_eur" in nbh_df.columns and "delta_pct" in nbh_df.columns:
+            scored_sub = nbh_df.dropna(subset=["pred_mm_eur", "price", "delta_pct"]).copy()
+            scored_sub = scored_sub.sort_values("date_obtained", ascending=False).head(60)
+            scored_sub = scored_sub.sort_values("delta_pct", ascending=False).head(15)
+            for _, r in scored_sub.iterrows():
+                recent_scored.append({
+                    "property_id": str(r.get("property_id", "")),
+                    "asking_eur": int(round(float(r["price"]) * 1000)),
+                    "predicted_eur": int(round(float(r["pred_mm_eur"]))),
+                    "delta_pct": round(float(r["delta_pct"]), 1),
+                    "livable_area": round(float(r["livable_area"])) if pd.notna(r.get("livable_area")) else None,
+                    "bedrooms": int(r["number_of_bedrooms"]) if pd.notna(r.get("number_of_bedrooms")) else None,
+                    "property_type": str(r.get("property_type_label") or ""),
+                    "condition": str(r.get("building_condition") or "") if pd.notna(r.get("building_condition")) else None,
+                    "energy_label": str(r.get("energy_label") or "") if pd.notna(r.get("energy_label")) else None,
+                    "date": str(r["date_obtained"])[:10] if pd.notna(r.get("date_obtained")) else None,
                 })
 
         # Listings from today_deals
@@ -230,9 +342,11 @@ class DataLoader:
 
         return {
             "name": name,
+            "display_name": _prettify_wijk(name, display_map),
             "stats": stats,
             "trend": trend,
             "listings": listings,
+            "recent_scored": recent_scored,
         }
 
     def get_today_deals(self):
@@ -324,6 +438,7 @@ class DataLoader:
             for src, dst in cols.items():
                 v = row.get(src)
                 p[dst] = None if (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else v
+            p["price_eur"] = round(float(row["price"]) * 1000) if pd.notna(row.get("price")) else None
             p["price_per_sqm"] = round(row["price"] * 1000 / row["livable_area"]) if row.get("livable_area") else None
             pid = row.get("property_id")
             if pd.notna(pid):

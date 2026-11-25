@@ -16,7 +16,6 @@ interface FormValues {
   building_condition: string;
   energy_label: string;
   price: string;
-  // Auto-filled from geocoding
   latitude: string;
   longitude: string;
   postal_code: string;
@@ -44,9 +43,73 @@ const INITIAL: FormValues = {
   neighbourhood: "",
 };
 
+const QUICK_EXAMPLES: { label: string; values: FormValues }[] = [
+  {
+    label: "1930s Townhouse · Binnenstad (145 m², EPC C)",
+    values: {
+      address: "Kortrijksesteenweg 100, 9000 Gent",
+      property_type: "HOUSE",
+      livable_area: "145",
+      number_of_bedrooms: "3",
+      year_built: "1935",
+      building_condition: "GOOD",
+      energy_label: "C",
+      price: "425000",
+      latitude: "51.0365",
+      longitude: "3.7138",
+      postal_code: "9000",
+      city: "Gent",
+      street: "Kortrijksesteenweg",
+      house_number: "100",
+      neighbourhood: "Stationsbuurt_Noord",
+    },
+  },
+  {
+    label: "Fixer-upper Rowhouse · Dampoort (130 m², EPC F)",
+    values: {
+      address: "Antwerpsesteenweg 45, 9040 Gent",
+      property_type: "HOUSE",
+      livable_area: "130",
+      number_of_bedrooms: "3",
+      year_built: "1920",
+      building_condition: "TO_RENOVATE",
+      energy_label: "F",
+      price: "285000",
+      latitude: "51.0574",
+      longitude: "3.7445",
+      postal_code: "9040",
+      city: "Gent",
+      street: "Antwerpsesteenweg",
+      house_number: "45",
+      neighbourhood: "Dampoort",
+    },
+  },
+  {
+    label: "Modern 2-Bed Flat · Zuid (92 m², EPC B)",
+    values: {
+      address: "Koningin Maria Hendrikaplein 12, 9000 Gent",
+      property_type: "APARTMENT",
+      livable_area: "92",
+      number_of_bedrooms: "2",
+      year_built: "2014",
+      building_condition: "AS_NEW",
+      energy_label: "B",
+      price: "365000",
+      latitude: "51.0358",
+      longitude: "3.7107",
+      postal_code: "9000",
+      city: "Gent",
+      street: "Koningin Maria Hendrikaplein",
+      house_number: "12",
+      neighbourhood: "Stationsbuurt_Zuid",
+    },
+  },
+];
+
 export default function ManualEntry() {
   const [form, setForm] = useState<FormValues>({ ...INITIAL });
   const [result, setResult] = useState<PredictionResult | null>(null);
+  const [baselineResult, setBaselineResult] = useState<PredictionResult | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [geocodeStatus, setGeocodeStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [geocodeDisplay, setGeocodeDisplay] = useState<string | null>(null);
@@ -84,50 +147,65 @@ export default function ManualEntry() {
     }
   };
 
-  const validate = (): Record<string, unknown> | null => {
-    if (!form.property_type) {
+  const buildPayload = (f: FormValues): Record<string, unknown> | null => {
+    if (!f.property_type) {
       setValidationError("Property type is required");
       return null;
     }
-    const area = Number(form.livable_area);
+    const area = Number(f.livable_area);
     if (!area || area <= 0) {
       setValidationError("Livable area is required");
       return null;
     }
-    const hasLatLon = form.latitude && form.longitude;
-    const hasPostal = form.postal_code;
-    if (!hasLatLon && !hasPostal) {
-      setValidationError("Look up an address first, or enter a postal code");
+    if (!f.latitude && !f.postal_code) {
+      setValidationError("Look up an address first");
       return null;
     }
-
     const data: Record<string, unknown> = {
-      property_type: form.property_type,
+      property_type: f.property_type,
       livable_area: area,
     };
-
-    if (form.number_of_bedrooms) data.number_of_bedrooms = Number(form.number_of_bedrooms);
-    if (form.year_built) data.year_built = Number(form.year_built);
-    if (form.building_condition) data.building_condition = form.building_condition;
-    if (form.energy_label) data.energy_label = form.energy_label;
-    if (form.price) data.price = Number(form.price);
-    if (form.latitude) data.latitude = Number(form.latitude);
-    if (form.longitude) data.longitude = Number(form.longitude);
-    if (form.postal_code) data.postal_code = form.postal_code;
-    if (form.city) data.city = form.city;
-    if (form.street) data.street = form.street;
-    if (form.house_number) data.house_number = form.house_number;
-
+    if (f.number_of_bedrooms) data.number_of_bedrooms = Number(f.number_of_bedrooms);
+    if (f.year_built) data.year_built = Number(f.year_built);
+    if (f.building_condition) data.building_condition = f.building_condition;
+    if (f.energy_label) data.energy_label = f.energy_label;
+    if (f.price) data.price = Number(f.price);
+    if (f.latitude) data.latitude = Number(f.latitude);
+    if (f.longitude) data.longitude = Number(f.longitude);
+    if (f.postal_code) data.postal_code = f.postal_code;
+    if (f.city) data.city = f.city;
+    if (f.street) data.street = f.street;
+    if (f.house_number) data.house_number = f.house_number;
+    if (f.neighbourhood) data.neighbourhood = f.neighbourhood;
     return data;
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const data = validate();
+    const data = buildPayload(form);
     if (!data) return;
     mutation.mutate(data, {
-      onSuccess: (res) => setResult(res),
+      onSuccess: (res) => {
+        setResult(res);
+        setBaselineResult(res);
+      },
     });
+  };
+
+  const handleExample = (ex: FormValues) => {
+    setForm({ ...ex });
+    setGeocodeStatus("done");
+    setGeocodeDisplay(`${ex.street} ${ex.house_number}, ${ex.postal_code} ${ex.city}`);
+    setValidationError(null);
+    const data = buildPayload(ex);
+    if (data) {
+      mutation.mutate(data, {
+        onSuccess: (res) => {
+          setResult(res);
+          setBaselineResult(res);
+        },
+      });
+    }
   };
 
   const handleRepredict = (formData: Record<string, unknown>) => {
@@ -136,182 +214,211 @@ export default function ManualEntry() {
     });
   };
 
+  const handleResetSimulation = () => {
+    if (baselineResult) setResult(baselineResult);
+  };
+
+  const selectClass =
+    "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+
   return (
     <div className="space-y-8">
-      <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Address lookup */}
-            <div>
-              <h4 className="text-sm font-semibold mb-2 text-foreground">
-                Address <span className="text-muted-foreground font-normal">*</span>
-              </h4>
-              <div className="flex gap-2">
-                <Input
-                  type="text"
-                  value={form.address}
-                  onChange={(e) => set("address", e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleGeocode();
-                    }
-                  }}
-                  placeholder="e.g. Veldstraat 1, 9000 Gent"
-                  className="flex-1"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleGeocode}
-                  disabled={geocodeStatus === "loading"}
-                >
-                  {geocodeStatus === "loading" ? "Looking up..." : "Look up"}
-                </Button>
-              </div>
-              {geocodeDisplay && (
-                <p className="text-xs text-positive mt-1">{geocodeDisplay}</p>
-              )}
-              {geocodeStatus === "done" && form.neighbourhood && (
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Neighbourhood: <span className="font-medium">{form.neighbourhood}</span>
-                  {" | "} {form.postal_code} {form.city}
-                  {" | "} {form.latitude}, {form.longitude}
-                </p>
-              )}
-              {geocodeStatus === "done" && !form.neighbourhood && (
-                <p className="text-xs text-amber-600 mt-0.5">
-                  Location found but outside known neighbourhoods.
-                  Prediction will still work but neighbourhood context won't be available.
-                </p>
-              )}
-            </div>
+      {/* Input card */}
+      <form onSubmit={handleSubmit} className="rounded-xl border border-border bg-card p-6 space-y-5">
+        {/* Quick try examples */}
+        <div className="flex flex-wrap items-center gap-2 pb-3 border-b border-border/70">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mr-1">
+            Try an example:
+          </span>
+          {QUICK_EXAMPLES.map((ex) => (
+            <button
+              key={ex.label}
+              type="button"
+              onClick={() => handleExample(ex.values)}
+              className="text-xs px-2.5 py-1 rounded-full border border-border bg-muted/40 hover:bg-muted text-foreground transition-colors cursor-pointer"
+            >
+              {ex.label}
+            </button>
+          ))}
+        </div>
 
-            {/* Required property info */}
-            <div>
-              <h4 className="text-sm font-semibold mb-2 text-foreground">
-                Property <span className="text-muted-foreground font-normal">*</span>
-              </h4>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                <div>
-                  <label className="text-xs text-muted-foreground">
-                    Property Type *
-                  </label>
-                  <select
-                    value={form.property_type}
-                    onChange={(e) => set("property_type", e.target.value)}
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">Select...</option>
-                    <option value="HOUSE">House</option>
-                    <option value="APARTMENT">Apartment</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground">
-                    Livable Area (m²) *
-                  </label>
-                  <Input
-                    type="number"
-                    value={form.livable_area}
-                    onChange={(e) => set("livable_area", e.target.value)}
-                    placeholder="e.g. 120"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground">
-                    Asking Price (€)
-                  </label>
-                  <Input
-                    type="number"
-                    value={form.price}
-                    onChange={(e) => set("price", e.target.value)}
-                    placeholder="e.g. 350000"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Optional features */}
-            <div>
-              <h4 className="text-sm font-semibold mb-2 text-foreground">
-                Optional <span className="text-muted-foreground font-normal">improves accuracy</span>
-              </h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div>
-                  <label className="text-xs text-muted-foreground">Bedrooms</label>
-                  <Input
-                    type="number"
-                    value={form.number_of_bedrooms}
-                    onChange={(e) => set("number_of_bedrooms", e.target.value)}
-                    placeholder="3"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground">Year Built</label>
-                  <Input
-                    type="number"
-                    value={form.year_built}
-                    onChange={(e) => set("year_built", e.target.value)}
-                    placeholder="1960"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground">Condition</label>
-                  <select
-                    value={form.building_condition}
-                    onChange={(e) => set("building_condition", e.target.value)}
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">Unknown</option>
-                    <option value="AS_NEW">As New</option>
-                    <option value="GOOD">Good</option>
-                    <option value="JUST_RENOVATED">Just Renovated</option>
-                    <option value="TO_BE_DONE_UP">To Be Done Up</option>
-                    <option value="TO_RENOVATE">To Renovate</option>
-                    <option value="TO_RESTORE">To Restore</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground">Energy Label</label>
-                  <select
-                    value={form.energy_label}
-                    onChange={(e) => set("energy_label", e.target.value)}
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">Unknown</option>
-                    {["A++", "A+", "A", "B", "C", "D", "E", "F", "G"].map((l) => (
-                      <option key={l} value={l}>{l}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {validationError && (
-              <p className="text-sm text-negative">{validationError}</p>
-            )}
-            {mutation.isError && (
-              <p className="text-sm text-negative">{mutation.error.message}</p>
-            )}
-
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? (
-                <span className="flex items-center gap-2">
-                  <span className="h-3.5 w-3.5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                  Predicting
-                </span>
-              ) : "Predict Price"}
+        {/* Address */}
+        <div>
+          <label htmlFor="manual-address" className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+            Address *
+          </label>
+          <div className="flex gap-2">
+            <Input
+              id="manual-address"
+              placeholder="e.g. Veldstraat 10, 9000 Gent"
+              value={form.address}
+              onChange={(e) => set("address", e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleGeocode();
+                }
+              }}
+              className="flex-1"
+            />
+            <Button type="button" variant="outline" onClick={handleGeocode} disabled={geocodeStatus === "loading"}>
+              {geocodeStatus === "loading" ? "Looking up..." : "Look up"}
             </Button>
-          </form>
+          </div>
+          {geocodeStatus === "done" && geocodeDisplay && (
+            <p className="mt-1.5 text-xs text-positive">
+              {geocodeDisplay}
+              {form.neighbourhood ? ` · ${form.neighbourhood.replace(/_/g, " ")}` : ""}
+            </p>
+          )}
+        </div>
 
+        {/* Core specs */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <label htmlFor="manual-type" className="block text-xs font-medium text-muted-foreground mb-1">
+              Property Type *
+            </label>
+            <select
+              id="manual-type"
+              value={form.property_type}
+              onChange={(e) => set("property_type", e.target.value)}
+              className={selectClass}
+            >
+              <option value="">Select...</option>
+              <option value="HOUSE">House</option>
+              <option value="APARTMENT">Apartment</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="manual-area" className="block text-xs font-medium text-muted-foreground mb-1">
+              Livable Area (m²) *
+            </label>
+            <Input
+              id="manual-area"
+              type="number"
+              min={10}
+              max={1500}
+              placeholder="145"
+              value={form.livable_area}
+              onChange={(e) => set("livable_area", e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="manual-asking" className="block text-xs font-medium text-muted-foreground mb-1">
+              Asking Price (€)
+            </label>
+            <Input
+              id="manual-asking"
+              type="number"
+              min={25000}
+              step={5000}
+              placeholder="385000"
+              value={form.price}
+              onChange={(e) => set("price", e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="manual-beds" className="block text-xs font-medium text-muted-foreground mb-1">
+              Bedrooms
+            </label>
+            <Input
+              id="manual-beds"
+              type="number"
+              min={0}
+              max={20}
+              placeholder="3"
+              value={form.number_of_bedrooms}
+              onChange={(e) => set("number_of_bedrooms", e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Condition / EPC / Year */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label htmlFor="manual-year" className="block text-xs font-medium text-muted-foreground mb-1">
+              Year Built
+            </label>
+            <Input
+              id="manual-year"
+              type="number"
+              min={1700}
+              max={2027}
+              placeholder="1955"
+              value={form.year_built}
+              onChange={(e) => set("year_built", e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="manual-cond" className="block text-xs font-medium text-muted-foreground mb-1">
+              Condition
+            </label>
+            <select
+              id="manual-cond"
+              value={form.building_condition}
+              onChange={(e) => set("building_condition", e.target.value)}
+              className={selectClass}
+            >
+              <option value="">Unknown</option>
+              <option value="AS_NEW">As new</option>
+              <option value="JUST_RENOVATED">Just renovated</option>
+              <option value="GOOD">Good</option>
+              <option value="TO_BE_DONE_UP">To refresh</option>
+              <option value="TO_RENOVATE">To renovate</option>
+              <option value="TO_RESTORE">To restore</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="manual-epc" className="block text-xs font-medium text-muted-foreground mb-1">
+              Energy Label (EPC)
+            </label>
+            <select
+              id="manual-epc"
+              value={form.energy_label}
+              onChange={(e) => set("energy_label", e.target.value)}
+              className={selectClass}
+            >
+              <option value="">Unknown</option>
+              {["A++", "A+", "A", "B", "C", "D", "E", "F", "G"].map((l) => (
+                <option key={l} value={l}>{l}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {validationError && <p className="text-sm text-negative" role="alert">{validationError}</p>}
+        {mutation.error && <p className="text-sm text-negative" role="alert">{mutation.error.message}</p>}
+
+        <div className="flex items-center justify-between pt-2">
+          <p className="text-xs text-muted-foreground">
+            Agency-blind Phase-7 Lean-5 valuation · calibrated 80% / 90% conformal range
+          </p>
+          <Button type="submit" disabled={mutation.isPending}>
+            {mutation.isPending ? "Valuing..." : "Predict Fair Value"}
+          </Button>
+        </div>
+      </form>
+
+      {/* Results */}
       {result && (
-        <>
-          <PredictionResultCard data={result} />
-          <FeatureForm
-            formData={result.form_data}
-            onRepredict={handleRepredict}
-            isPending={mutation.isPending}
+        <div className="space-y-6">
+          <PredictionResultCard
+            data={result}
+            baseFormData={baselineResult?.form_data ?? result.form_data}
+            basePrediction={baselineResult?.prediction.predicted_price ?? result.prediction.predicted_price}
+            onSimulate={handleRepredict}
+            onResetSimulation={handleResetSimulation}
+            isSimulating={mutation.isPending}
           />
-        </>
+          <div className="rounded-xl border border-border bg-card p-5">
+            <FeatureForm
+              formData={result.form_data}
+              onRepredict={handleRepredict}
+              isPending={mutation.isPending}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

@@ -2,6 +2,7 @@ import type { PredictionResult, ManualPredictionResult } from "../types/predicti
 import type { NeighbourhoodSummary, NeighbourhoodDetail, DashboardStats } from "../types/neighbourhood";
 import type { TodayDeal, LiveListing } from "../types/property";
 import type { EdaReport } from "../types/eda";
+import type { AffordabilityQuery, AffordabilityResponse, MarketInsights, ModelMetadata } from "../types/insights";
 
 const BASE = "/api";
 
@@ -73,4 +74,15 @@ export const api = {
     fetchJson<{ count: number; date_used: string | null }>(`${BASE}/listings/count`),
 
   getEdaReport: () => fetchJson<EdaReport>(`${BASE}/eda`),
+
+  getModelMetadata: () => fetchJson<ModelMetadata>(`${BASE}/model/metadata`),
+
+  getMarketInsights: () => fetchJson<MarketInsights>(`${BASE}/insights`),
+
+  evaluateAffordability: (query: AffordabilityQuery) =>
+    fetchJson<AffordabilityResponse>(`${BASE}/affordability`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(query),
+    }),
 };

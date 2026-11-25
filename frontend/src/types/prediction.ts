@@ -1,5 +1,8 @@
 export interface Comparable {
+  property_id?: string | null;
+  url?: string | null;
   price_k: number;
+  price_eur?: number | null;
   livable_area: number;
   bedrooms: number | null;
   condition: string | null;

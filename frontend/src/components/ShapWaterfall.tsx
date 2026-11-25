@@ -1,15 +1,14 @@
-import { useState } from "react";
-import type { ShapData, ShapFeature } from "../types/prediction";
+import { useState, useMemo } from "react";
+import type { ShapData } from "../types/prediction";
+import { formatEur, formatEurSigned } from "../lib/format";
 
-type View = "all" | "comparable" | "grouped";
+interface Props {
+  shap: ShapData;
+  predictedPrice: number;
+}
 
-const VIEW_LABELS: Record<View, string> = {
-  all: "All Features",
-  comparable: "From Comparables",
-  grouped: "Grouped",
-};
+type ViewMode = "grouped" | "comparable" | "all";
 
-// Features that define "what kind of property in what location" — collapsed in comparable view
 const BASELINE_KEYS = new Set([
   "neighbourhood",
   "postal_code",
@@ -18,223 +17,248 @@ const BASELINE_KEYS = new Set([
   "dist_from_center",
   "distance_to_street",
   "street_type",
+  "statbel_sector",
+  "sp_idw_psqm_k5",
+  "sp_idw_psqm_k15",
+  "sp_idw_psqm_k40",
+  "sp_type_wijk_psqm",
+  "sp_type_sector_psqm",
+  "sp_type_postal_psqm",
+  "te_street_log_psqm",
 ]);
 
-// Feature grouping for the grouped view
-const FEATURE_GROUPS: [string, Set<string>][] = [
-  ["Location & micro-geo", new Set([
-    "neighbourhood", "postal_code", "dist_from_center", "distance_to_street", "street_type",
-    "fl_mobiscore", "fl_mobiscore_x_area", "fl_heritage_count_150m", "fl_dist_navigable_water_m",
-    "fl_no2_2025_ugm3", "sector_median_income", "log_sector_income_x_area",
-    "sp_prior_price", "sp_log_prior_price", "sp_same_type_idw_psqm_k15", "sp_same_type_idw_psqm_k5",
-    "sp_idw_psqm_k15", "sp_type_wijk_psqm", "sp_type_sector_psqm", "te_street_log_psqm",
-  ])],
-  ["Type & size", new Set([
-    "property_type_HOUSE", "property_subtype", "livable_area", "property_size", "log_property_size_p1",
-    "facade_count", "street_facade_width", "total_floors", "floor_number",
-    "grb_bldg_footprint", "grb_parcel_area", "grb_log_parcel_area", "grb_open_plot_area",
-    "grb_implied_floors", "grb_adjoining_bldgs",
-  ])],
-  ["Rooms", new Set(["number_of_bedrooms", "number_of_bathrooms", "number_of_toilets", "kitchen_surface", "living_room_surface", "shower_room_count"])],
-  ["Condition & age", new Set(["building_condition", "condition_ordinal", "condition_x_area", "age_x_condition", "year_built", "age", "kitchen_type", "is_newly_built", "renovation_obligation"])],
-  ["Energy", new Set(["energy_label", "epc_ordinal", "epc_ef_area_penalty", "primary_energy_consumption", "heating_type", "has_heat_pump", "has_photovoltaic_panels", "has_double_glazing", "has_thermic_panels"])],
-  ["Outdoor", new Set(["has_garden", "garden_surface", "has_terrace", "terrace_surface", "outdoor_surface_total", "log_outdoor_surface", "has_swimming_pool"])],
-  ["Parking & amenities", new Set(["parking_indoor", "parking_outdoor", "total_parking", "has_lift", "has_basement", "has_attic", "monthly_costs", "cadastral_income", "log_cadastral_income", "ki_per_sqm"])],
-  ["Description & photos", new Set(["_other", "txt_tab_plus_text_psqm", "txt_blend_psqm", "txt_super_tabresid", "txt_e5l_a5_price", "txt_tfidf_a2_price", "vis_blend_psqm", "vis_blend_tabtxt_resid"])],
-];
+const FEATURE_GROUPS: Record<string, string[]> = {
+  "Location & neighbourhood": [
+    "neighbourhood", "postal_code", "dist_from_center", "distance_to_street",
+    "street_type", "statbel_sector", "latitude", "longitude",
+    "sp_idw_psqm_k5", "sp_idw_psqm_k15", "sp_idw_psqm_k40",
+    "sp_type_wijk_psqm", "sp_type_sector_psqm", "sp_type_postal_psqm",
+    "te_street_log_psqm", "sector_median_income", "log_sector_income_x_area",
+    "fl_mobiscore", "fl_mobiscore_x_area", "fl_noise_road_db", "fl_dist_water_m",
+    "fl_dist_monument_m", "fl_in_heritage", "fl_heritage_x_epc",
+    "gent_parking_zone_ord", "gent_crime_per_1k",
+  ],
+  "Size & building footprint": [
+    "property_type_HOUSE", "property_subtype", "livable_area", "log_livable_area",
+    "property_size", "log_property_size_p1", "facade_count", "floor",
+    "grb_footprint_area", "grb_parcel_area", "grb_log_parcel_area",
+    "grb_log_footprint", "grb_implied_floors", "grb_open_plot_area",
+  ],
+  "Rooms & layout": [
+    "number_of_bedrooms", "number_of_bathrooms", "number_of_toilets",
+    "number_of_rooms", "area_per_bedroom", "area_per_room",
+    "has_living_room", "has_dining_room", "has_office", "has_dressing_room",
+  ],
+  "Condition & age": [
+    "building_condition", "condition_ordinal", "condition_x_area",
+    "year_built", "age", "age_x_condition", "kitchen_type",
+  ],
+  "Energy & EPC": [
+    "energy_label", "epc_ordinal", "epc_ef_area_penalty",
+    "primary_energy_consumption", "heating_type",
+    "has_double_glazing", "has_photovoltaic_panels", "has_heat_pump",
+  ],
+  "Outdoor & garden": [
+    "has_garden", "garden_surface", "garden_orientation",
+    "has_terrace", "terrace_surface", "terrace_orientation",
+    "outdoor_surface_total", "log_outdoor_surface", "has_swimming_pool",
+  ],
+  "Parking & amenities": [
+    "parking_indoor", "parking_outdoor", "total_parking",
+    "indoor_parking_count", "outdoor_parking_count",
+    "has_lift", "has_attic", "has_basement", "has_air_conditioning",
+    "cadastral_income", "log_cadastral_income", "ki_per_sqm",
+  ],
+  "Description, photos & macro": [
+    "_other", "txt_blend_psqm", "txt_super_tabresid", "txt_tab_plus_text_psqm",
+    "txt_e5l_a5_price", "txt_e5l_a12_psqm", "txt_tfidf_a2_price", "txt_tfidf_a14_psqm",
+    "txt_tfidf_spresid", "txt_tfidf_tabresid", "txt_e5l_tabresid", "txt_sgd_psqm",
+    "vis_blend_psqm", "vis_blend_tabtxt_resid",
+    "section_exterior", "section_interior", "pictures_per_bedroom",
+  ],
+};
 
-interface Props {
-  data: ShapData;
-  predictedPrice: number;
-}
-
-interface Segment {
+interface BarItem {
   label: string;
   value: number;
-  start: number;
-  end: number;
-  isPositive: boolean;
 }
 
-function buildSegments(
-  baseValue: number,
-  items: { label: string; value: number }[],
-): Segment[] {
-  const segments: Segment[] = [];
-  let running = baseValue;
-  for (const item of items) {
-    const start = running;
-    const end = running + item.value;
-    segments.push({
-      label: item.label,
-      value: item.value,
-      start,
-      end,
-      isPositive: item.value >= 0,
-    });
-    running = end;
-  }
-  return segments;
-}
+const MODES: { key: ViewMode; label: string }[] = [
+  { key: "grouped", label: "Grouped" },
+  { key: "comparable", label: "vs Comparables" },
+  { key: "all", label: "Detailed" },
+];
 
-function getComparableItems(features: ShapFeature[]): {
-  effectiveBase: number;
-  baselineSum: number;
-  items: { label: string; value: number }[];
-} {
-  let baselineSum = 0;
-  const remaining: { label: string; value: number }[] = [];
-  for (const f of features) {
-    if (BASELINE_KEYS.has(f.feature_key)) {
-      baselineSum += f.value_eur;
-    } else {
-      remaining.push({ label: f.feature, value: f.value_eur });
+export default function ShapWaterfall({ shap, predictedPrice }: Props) {
+  const [mode, setMode] = useState<ViewMode>("grouped");
+
+  const { baseLabel, baseValue, bars } = useMemo(() => {
+    if (mode === "all") {
+      return {
+        baseLabel: "Ghent baseline",
+        baseValue: shap.base_value_eur,
+        bars: shap.features.map((f) => ({ label: f.feature, value: f.value_eur })),
+      };
     }
-  }
-  return { effectiveBase: baselineSum, baselineSum, items: remaining };
-}
 
-function getGroupedItems(features: ShapFeature[]): { label: string; value: number }[] {
-  const groupSums = new Map<string, number>();
-  const assigned = new Set<string>();
+    if (mode === "comparable") {
+      let comparableBase = shap.base_value_eur;
+      const remaining: BarItem[] = [];
+      for (const f of shap.features) {
+        if (BASELINE_KEYS.has(f.feature_key)) {
+          comparableBase += f.value_eur;
+        } else {
+          remaining.push({ label: f.feature, value: f.value_eur });
+        }
+      }
+      return {
+        baseLabel: "Location & type base",
+        baseValue: comparableBase,
+        bars: remaining,
+      };
+    }
 
-  for (const f of features) {
-    for (const [groupName, keys] of FEATURE_GROUPS) {
-      if (keys.has(f.feature_key)) {
-        groupSums.set(groupName, (groupSums.get(groupName) ?? 0) + f.value_eur);
-        assigned.add(f.feature_key);
-        break;
+    const groupTotals = new Map<string, number>();
+    let otherTotal = 0;
+
+    for (const f of shap.features) {
+      let matched = false;
+      for (const [groupName, keys] of Object.entries(FEATURE_GROUPS)) {
+        if (keys.includes(f.feature_key)) {
+          groupTotals.set(groupName, (groupTotals.get(groupName) || 0) + f.value_eur);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        otherTotal += f.value_eur;
       }
     }
-  }
 
-  // Anything not assigned goes into "Other"
-  for (const f of features) {
-    if (!assigned.has(f.feature_key)) {
-      groupSums.set("Other", (groupSums.get("Other") ?? 0) + f.value_eur);
+    const grouped: BarItem[] = [];
+    for (const [name, total] of groupTotals.entries()) {
+      if (Math.abs(total) >= 500) {
+        grouped.push({ label: name, value: total });
+      }
     }
-  }
-
-  // Return in the defined group order, skip groups with ~zero contribution
-  const items: { label: string; value: number }[] = [];
-  for (const [groupName] of FEATURE_GROUPS) {
-    const val = groupSums.get(groupName);
-    if (val !== undefined && Math.abs(val) > 50) {
-      items.push({ label: groupName, value: Math.round(val) });
+    if (Math.abs(otherTotal) >= 500) {
+      grouped.push({ label: "Other signals", value: otherTotal });
     }
-  }
-  const otherVal = groupSums.get("Other");
-  if (otherVal !== undefined && Math.abs(otherVal) > 50) {
-    items.push({ label: "Other", value: Math.round(otherVal) });
-  }
+    grouped.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
 
-  // Sort by absolute value descending
-  items.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
-  return items;
-}
+    return {
+      baseLabel: "Ghent baseline",
+      baseValue: shap.base_value_eur,
+      bars: grouped,
+    };
+  }, [shap, mode]);
 
-export default function ShapWaterfall({ data, predictedPrice }: Props) {
-  const [view, setView] = useState<View>("comparable");
-  const { base_value_eur, features } = data;
+  const segments = useMemo(() => {
+    const out: Array<BarItem & { start: number; end: number }> = [];
+    let acc = baseValue;
+    for (const b of bars) {
+      const start = acc;
+      const end = acc + b.value;
+      acc = end;
+      out.push({ ...b, start, end });
+    }
+    return out;
+  }, [baseValue, bars]);
 
-  let effectiveBase = base_value_eur;
-  let baseLabel = "Average price";
-  let baseDescription = `dataset average of \u20AC${base_value_eur.toLocaleString()}`;
-  let segments: Segment[];
+  const allValues = [baseValue, predictedPrice, ...segments.flatMap((s) => [s.start, s.end])];
+  const rawMin = Math.min(...allValues);
+  const rawMax = Math.max(...allValues);
+  const padding = Math.max((rawMax - rawMin) * 0.08, 10_000);
+  const minVal = rawMin - padding;
+  const maxVal = rawMax + padding;
+  const range = Math.max(maxVal - minVal, 1);
 
-  if (view === "comparable") {
-    const comp = getComparableItems(features);
-    effectiveBase = base_value_eur + comp.baselineSum;
-    baseLabel = "Comparable baseline";
-    baseDescription = `comparable properties at \u20AC${effectiveBase.toLocaleString()}`;
-    segments = buildSegments(effectiveBase, comp.items);
-  } else if (view === "grouped") {
-    const items = getGroupedItems(features);
-    segments = buildSegments(base_value_eur, items);
-  } else {
-    const items = features.map((f) => ({ label: f.feature, value: f.value_eur }));
-    segments = buildSegments(base_value_eur, items);
-  }
-
-  const allValues = [effectiveBase, predictedPrice];
-  for (const s of segments) {
-    allValues.push(s.start, s.end);
-  }
-  const minVal = Math.min(...allValues) * 0.95;
-  const maxVal = Math.max(...allValues) * 1.05;
-  const range = maxVal - minVal || 1;
-  const toPercent = (v: number) => ((v - minVal) / range) * 100;
+  const toPct = (v: number) => Math.max(0, Math.min(100, ((v - minVal) / range) * 100));
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <h3 className="font-display text-lg font-semibold">Price Breakdown</h3>
-        <div className="flex gap-1">
-          {(Object.keys(VIEW_LABELS) as View[]).map((v) => (
+    <section aria-label="Price breakdown" className="rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
+        <div>
+          <h3 className="font-display text-lg font-semibold">Price Drivers (TreeSHAP)</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Exact euro contributions from{" "}
+            <span className="font-medium text-foreground">{baseLabel.toLowerCase()}</span>{" "}
+            ({formatEur(baseValue)}) to fair value ({formatEur(predictedPrice)})
+          </p>
+        </div>
+
+        <div className="inline-flex rounded-lg bg-muted p-0.5 border border-border/60" role="tablist" aria-label="Breakdown view">
+          {MODES.map((m) => (
             <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`px-2.5 py-1 text-[11px] rounded-full transition-colors ${
-                view === v
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
+              key={m.key}
+              type="button"
+              role="tab"
+              aria-selected={mode === m.key}
+              onClick={() => setMode(m.key)}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                mode === m.key
+                  ? "bg-card text-foreground shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {VIEW_LABELS[v]}
+              {m.label}
             </button>
           ))}
         </div>
       </div>
-      <p className="text-sm text-muted-foreground mt-1 mb-6">
-        How each feature shifts the prediction from the{" "}
-        <span className="font-semibold tabular-nums">{baseDescription}</span>
-      </p>
 
-      <div className="space-y-1" role="list" aria-label="Feature contributions to price">
-        {/* Base value */}
+      <div className="space-y-1.5" role="list" aria-label="Feature price impacts">
         <WaterfallRow
           label={baseLabel}
-          valueLabel={`\u20AC${effectiveBase.toLocaleString()}`}
-          barLeft={toPercent(minVal)}
-          barWidth={toPercent(effectiveBase) - toPercent(minVal)}
-          colorClass="bg-muted-foreground/30"
+          valueLabel={formatEur(baseValue)}
+          barLeft={0}
+          barWidth={toPct(baseValue)}
+          colorClass="bg-muted-foreground/25"
           isBase
         />
 
-        {segments.map((s, i) => {
-          const left = toPercent(Math.min(s.start, s.end));
-          const width = Math.abs(toPercent(s.end) - toPercent(s.start));
-          const colorClass = s.isPositive ? "bg-positive" : "bg-negative";
-          const sign = s.value >= 0 ? "+" : "";
+        {segments.map((seg, i) => {
+          const isPositive = seg.value >= 0;
+          const left = toPct(Math.min(seg.start, seg.end));
+          const right = toPct(Math.max(seg.start, seg.end));
+          const width = Math.max(right - left, 0.8);
+
           return (
             <WaterfallRow
-              key={i}
-              label={s.label}
-              valueLabel={`${sign}\u20AC${s.value.toLocaleString()}`}
+              key={`${seg.label}-${i}`}
+              label={seg.label}
+              valueLabel={formatEurSigned(seg.value)}
               barLeft={left}
-              barWidth={Math.max(width, 0.3)}
-              colorClass={colorClass}
-              isPositive={s.isPositive}
+              barWidth={width}
+              colorClass={isPositive ? "bg-positive" : "bg-negative"}
+              isPositive={isPositive}
             />
           );
         })}
 
-        {/* Final prediction */}
-        <WaterfallRow
-          label="Predicted price"
-          valueLabel={`\u20AC${predictedPrice.toLocaleString()}`}
-          barLeft={toPercent(minVal)}
-          barWidth={toPercent(predictedPrice) - toPercent(minVal)}
-          colorClass="bg-primary"
-          isBase
-        />
+        <div className="pt-1.5 mt-1.5 border-t border-border/70">
+          <WaterfallRow
+            label="Predicted fair value"
+            valueLabel={formatEur(predictedPrice)}
+            barLeft={0}
+            barWidth={toPct(predictedPrice)}
+            colorClass="bg-primary"
+            isBase
+          />
+        </div>
       </div>
 
-      <div className="flex justify-between text-[10px] text-muted-foreground mt-2 ml-22 mr-22 md:ml-34 md:mr-26">
-        <span className="tabular-nums">{"\u20AC"}{Math.round(minVal).toLocaleString()}</span>
-        <span className="tabular-nums">{"\u20AC"}{Math.round(maxVal).toLocaleString()}</span>
+      {/* Aligned axis ticks */}
+      <div className="grid grid-cols-[120px_1fr_84px] md:grid-cols-[185px_1fr_92px] gap-3 mt-2 text-[10px] text-muted-foreground tabular-nums">
+        <span />
+        <div className="flex justify-between">
+          <span>{formatEur(minVal)}</span>
+          <span>{formatEur((minVal + maxVal) / 2)}</span>
+          <span>{formatEur(maxVal)}</span>
+        </div>
+        <span />
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -256,31 +280,36 @@ function WaterfallRow({
   isPositive?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2 h-7 group" role="listitem">
-      <div className="w-20 md:w-32 text-[11px] md:text-xs text-right truncate flex-shrink-0">
-        <span className={isBase ? "font-semibold text-foreground" : "text-muted-foreground group-hover:text-foreground transition-colors"}>
+    <div
+      className="grid grid-cols-[120px_1fr_84px] md:grid-cols-[185px_1fr_92px] items-center gap-3 h-7 group"
+      role="listitem"
+    >
+      <div className="text-xs text-right truncate" title={label}>
+        <span
+          className={
+            isBase
+              ? "font-semibold text-foreground"
+              : "text-muted-foreground group-hover:text-foreground transition-colors"
+          }
+        >
           {label}
         </span>
       </div>
-      <div className="flex-1 relative h-5 bg-muted/40 rounded-sm overflow-hidden">
+      <div className="relative h-4 bg-muted/40 rounded overflow-hidden">
         <div
-          className={`absolute top-0 h-full rounded-sm transition-all ${colorClass} ${isBase ? "opacity-70" : "opacity-80 group-hover:opacity-100"}`}
-          style={{
-            left: `${barLeft}%`,
-            width: `${barWidth}%`,
-            minWidth: "2px",
-          }}
+          className={`absolute top-0 h-full rounded transition-all duration-300 ${colorClass}`}
+          style={{ left: `${barLeft}%`, width: `${barWidth}%` }}
         />
       </div>
-      <div className="w-20 md:w-24 text-[11px] md:text-xs text-right flex-shrink-0 tabular-nums">
+      <div className="text-xs text-right tabular-nums">
         <span
-          className={`font-mono ${
+          className={
             isBase
-              ? "font-semibold text-foreground"
+              ? "font-bold text-foreground"
               : isPositive
-                ? "text-positive"
-                : "text-negative"
-          }`}
+                ? "font-medium text-positive"
+                : "font-medium text-negative"
+          }
         >
           {valueLabel}
         </span>
