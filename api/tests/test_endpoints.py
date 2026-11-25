@@ -160,3 +160,27 @@ def test_affordability_endpoint(mock_loader):
     assert first["tier"] in ("comfortable", "realistic")
     assert second["tier"] in ("stretch", "out_of_reach")
     assert "geojson" in first
+
+
+def test_spa_static_serving_and_api_404(mock_loader, tmp_path):
+    (tmp_path / "index.html").write_text("<html><body>Ghent SPA</body></html>", encoding="utf-8")
+    (tmp_path / "app.js").write_text("console.log('ok');", encoding="utf-8")
+
+    with patch("api.app.data_loader", mock_loader):
+        app = create_app(loader=mock_loader)
+        app.config["TESTING"] = True
+        app.config["FRONTEND_DIST_DIR"] = str(tmp_path)
+        with app.test_client() as test_client:
+            # SPA deep routes return index.html
+            for route in ("/", "/predict", "/deals", "/explore", "/neighbourhoods", "/insights"):
+                r = test_client.get(route)
+                assert r.status_code == 200
+                assert b"Ghent SPA" in r.data
+            # Built static asset served directly
+            r_js = test_client.get("/app.js")
+            assert r_js.status_code == 200
+            assert b"console.log" in r_js.data
+            # Unknown /api/* routes still return JSON 404 (not index.html)
+            r_api = test_client.get("/api/does-not-exist")
+            assert r_api.status_code == 404
+            assert r_api.get_json()["error"] == "Not found"

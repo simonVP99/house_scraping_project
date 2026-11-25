@@ -36,16 +36,20 @@ PYTHONPATH=src .venv-api/bin/python -u src/build_market_insights.py
 ```
 Outputs `outputs/models/production/{feature_pipeline.joblib,track_tabular_text.joblib,track_multimodal.joblib,metadata.json,oof_analytics.parquet,market_insights.json}`.
 
-### 2. Run Backend API (Flask, port `5001`)
+### 2. Run Production Server (Single-Process Waitress WSGI + Built React SPA, port `5001`)
 ```bash
-.venv-api/bin/python -m api.app
+cd frontend && npm run build && cd ..
+.venv-api/bin/python -m api.wsgi
 ```
+Serves both the built React app (`http://127.0.0.1:5001/predict`, `/deals`, `/explore`, `/neighbourhoods`, `/insights`) and all `/api/*` endpoints from one MPS-safe process. See `docs/deploy.md` for `launchd` always-on templates, Cloudflare Tunnel remote access, and bundle sync.
+
 Key endpoints:
 - `GET  /api/health`
 - `GET  /api/model/metadata`
 - `GET  /api/insights`
+- `GET  /api/deals`
 - `POST /api/affordability`
-- `GET  /api/predict/url?url=<immoweb-url>`
+- `GET  /api/predict/url?url=<immoweb-url>` (multimodal with live SigLIP2+SO400M photo scoring)
 - `POST /api/predict/form`
 - `POST /api/predict/manual`
 - `GET  /api/neighbourhoods` and `GET /api/neighbourhoods/<name>`

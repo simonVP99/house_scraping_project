@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd service template for always-on Ghent RE Intelligence WSGI server (Issue #24).
+  Serves BOTH the built React SPA (frontend/dist) and the Phase-7 API on http://127.0.0.1:5001.
+
+  Install:
+    cd frontend && npm run build
+    cp deploy/com.ghent-avm.server.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.ghent-avm.server.plist
+
+  Optional remote access via Cloudflare Tunnel:
+    cloudflared tunnel --url http://127.0.0.1:5001
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ghent-avm.server</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/svp/Personal/immo_datacollection/house_scraping_project</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/svp/Personal/immo_datacollection/house_scraping_project/.venv-api/bin/python</string>
+    <string>-m</string>
+    <string>api.wsgi</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>GHENT_HOST</key>
+    <string>127.0.0.1</string>
+    <key>GHENT_PORT</key>
+    <string>5001</string>
+    <key>GHENT_THREADS</key>
+    <string>4</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/svp/Personal/immo_datacollection/house_scraping_project/logs/launchd_server.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/svp/Personal/immo_datacollection/house_scraping_project/logs/launchd_server.err.log</string>
+</dict>
+</plist>

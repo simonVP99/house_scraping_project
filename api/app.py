@@ -2,16 +2,16 @@ import json
 import os
 
 import pandas as pd
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from api.data_loader import DataLoader
 from api.prediction import PredictionService
 from api.live_listings import LiveListingsService
 
-EDA_REPORT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               'outputs', 'eda', 'eda_report.json')
-MARKET_INSIGHTS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                    'outputs', 'models', 'production', 'market_insights.json')
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRONTEND_DIST_DIR = os.path.join(PROJECT_ROOT, 'frontend', 'dist')
+EDA_REPORT_PATH = os.path.join(PROJECT_ROOT, 'outputs', 'eda', 'eda_report.json')
+MARKET_INSIGHTS_PATH = os.path.join(PROJECT_ROOT, 'outputs', 'models', 'production', 'market_insights.json')
 
 _eda_cache = {'path': None, 'mtime': None, 'report': None}
 _insights_cache = {'path': None, 'mtime': None, 'data': None}
@@ -545,6 +545,26 @@ def create_app(loader=None, pred_service=None, listings_service=None):
             if field["name"] == name:
                 return jsonify(field)
         return jsonify({"error": f"Unknown field '{name}'"}), 404
+
+    # ---- Built React SPA Static Serving (Production Single-Process Mode) ---
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def serve_spa(path):
+        if path.startswith("api/"):
+            return jsonify({"error": "Not found"}), 404
+        dist_dir = app.config.get("FRONTEND_DIST_DIR", FRONTEND_DIST_DIR)
+        if not os.path.isdir(dist_dir):
+            return jsonify({
+                "status": "api_only",
+                "message": "Frontend bundle not built. Run `cd frontend && npm run build`.",
+            }), 404
+        candidate = os.path.join(dist_dir, path)
+        if path and os.path.isfile(candidate):
+            return send_from_directory(dist_dir, path)
+        index_html = os.path.join(dist_dir, "index.html")
+        if os.path.isfile(index_html):
+            return send_from_directory(dist_dir, "index.html")
+        return jsonify({"error": "Frontend index.html missing"}), 404
 
     return app
 
